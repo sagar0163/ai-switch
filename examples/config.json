@@ -1,0 +1,33 @@
+{
+  "providers": {
+    "openai": {
+      "apiKey": "your-openai-api-key",
+      "model": "gpt-4",
+      "baseUrl": "https://api.openai.com/v1"
+    },
+    "anthropic": {
+      "apiKey": "your-anthropic-api-key",
+      "model": "claude-3-opus-20240229",
+      "baseUrl": "https://api.anthropic.com/v1"
+    },
+    "google": {
+      "apiKey": "your-google-api-key",
+      "model": "gemini-pro",
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta"
+    },
+    "ollama": {
+      "baseUrl": "http://localhost:11434",
+      "model": "llama2"
+    }
+  },
+  "cache": {
+    "enabled": true,
+    "ttl": 3600,
+    "maxSize": 1000
+  },
+  "failover": true,
+  "costTracking": {
+    "enabled": true
+  },
+  "defaultProvider": "openai"
+}
