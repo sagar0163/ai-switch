@@ -9,6 +9,7 @@
 const { BaseProvider } = require('./base');
 const { ProviderError } = require('../utils/errors');
 const { parseOllamaUsage } = require('../utils/usage');
+const { forEachLine, StreamController } = require('../utils/stream');
 
 class OllamaProvider extends BaseProvider {
   constructor(config) {
@@ -33,10 +34,38 @@ class OllamaProvider extends BaseProvider {
     }
   }
 
+  /**
+   * Build the request endpoint + body for a generate/chat call.
+   * @param {string} model - Model id
+   * @param {Object} options - Request options
+   * @param {boolean} stream - Whether to stream
+   * @returns {{endpoint: string, body: Object}}
+   */
+  _requestBody(model, options, stream) {
+    const messages = options.messages || [{ role: 'user', content: options.prompt ?? '' }];
+    const isChat = Array.isArray(options.messages) && options.messages.length > 0;
+    const shared = {
+      model,
+      stream,
+      options: {
+        temperature: options.temperature ?? 0.7,
+        num_predict: options.maxTokens || 2048
+      }
+    };
+
+    // Full history goes through the chat endpoint; a single prompt stays on /api/generate
+    const endpoint = isChat ? `${this.baseUrl}/api/chat` : `${this.baseUrl}/api/generate`;
+    const body = isChat
+      ? { ...shared, messages }
+      : { ...shared, prompt: options.prompt };
+
+    return { endpoint, body };
+  }
+
   async complete(prompt, options = {}) {
     const model = options.model || this.defaultModel;
     const messages = options.messages || [{ role: 'user', content: prompt }];
-    const isChat = Array.isArray(options.messages) && options.messages.length > 0;
+    const { endpoint, body } = this._requestBody(model, { ...options, prompt, messages }, false);
 
     try {
       // Check availability first
@@ -47,28 +76,6 @@ class OllamaProvider extends BaseProvider {
           this.name
         );
       }
-
-      // Full history goes through the chat endpoint; a single prompt stays on /api/generate
-      const endpoint = isChat ? `${this.baseUrl}/api/chat` : `${this.baseUrl}/api/generate`;
-      const body = isChat
-        ? {
-          model,
-          messages,
-          stream: false,
-          options: {
-            temperature: options.temperature ?? 0.7,
-            num_predict: options.maxTokens || 2048
-          }
-        }
-        : {
-          model,
-          prompt,
-          stream: false,
-          options: {
-            temperature: options.temperature ?? 0.7,
-            num_predict: options.maxTokens || 2048
-          }
-        };
 
       const response = await fetch(endpoint, {
         method: 'POST',
@@ -89,7 +96,9 @@ class OllamaProvider extends BaseProvider {
       }
 
       const data = await response.json();
-      const text = isChat ? data.message?.content : data.response;
+      const text = Array.isArray(options.messages) && options.messages.length > 0
+        ? data.message?.content
+        : data.response;
 
       if (!text) {
         throw new ProviderError('No response from Ollama', this.name);
@@ -103,6 +112,78 @@ class OllamaProvider extends BaseProvider {
       if (error instanceof ProviderError) throw error;
       throw new ProviderError(error.message, this.name);
     }
+  }
+
+  /**
+   * Stream a completion, emitting tokens via onToken as they arrive.
+   * Ollama streams NDJSON lines with `response` (generate) or `message.content`
+   * (chat) delta fields plus a final `done: true` object holding token counts.
+   * @param {string} prompt - The prompt
+   * @param {Object} options - Request options
+   * @param {(fragment: string) => void} onToken - Token callback
+   * @returns {Promise<{text: string, usage: Object}>} Aggregated response
+   */
+  async streamComplete(prompt, options = {}, onToken) {
+    const model = options.model || this.defaultModel;
+    const messages = options.messages || [{ role: 'user', content: prompt }];
+    const isChat = Array.isArray(options.messages) && options.messages.length > 0;
+    const controller = new StreamController({ provider: this.name, onToken });
+    const { endpoint, body } = this._requestBody(model, { ...options, prompt, messages }, true);
+
+    const available = await this.isAvailable();
+    if (!available) {
+      throw new ProviderError(
+        'Ollama server not running. Start with: ollama serve',
+        this.name
+      );
+    }
+
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(body)
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new ProviderError(
+        this._formatError({ message: error.error || `HTTP ${response.status}` }),
+        this.name,
+        response.status,
+        response.headers.get('retry-after')
+      );
+    }
+
+    let done = null;
+    await forEachLine(response, (line) => {
+      let chunk;
+      try {
+        chunk = JSON.parse(line);
+      } catch {
+        controller.fail('Invalid stream chunk from Ollama');
+        return;
+      }
+
+      if (chunk.error) {
+        controller.fail(chunk.error);
+        return;
+      }
+
+      const delta = isChat ? chunk.message?.content : chunk.response;
+      if (delta) controller.push(delta);
+      if (chunk.done === true) done = done || chunk;
+    });
+
+    if (controller.text.length === 0) {
+      throw new ProviderError('No response from Ollama', this.name);
+    }
+
+    return {
+      text: controller.text.trim(),
+      usage: parseOllamaUsage(done || {})
+    };
   }
 
   /**
