@@ -23,5 +23,5 @@
 - [x] 3. `AISwitch.ask` streaming path (onToken/onResult, mid-stream failover, cache short-circuit)
 - [x] 4. CLI `ask` streaming + `--no-stream` + `--json`; CLI `chat` streaming
 - [x] 5. Unit tests: stream-concat == non-stream output, mid-stream failover, no stream on cache hit, --no-stream path
-- [ ] 6. README + CHANGELOG docs for streaming
+- [x] 6. README + CHANGELOG docs for streaming
 - [ ] 7. Lint + full test run green

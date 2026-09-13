@@ -107,11 +107,17 @@ cost.
 ## Usage
 
 ```bash
-# Ask a question (auto-selects best available provider)
+# Ask a question (auto-selects best available provider, streams tokens as they arrive)
 ai-switch ask "What is quantum computing?"
 
 # Use specific provider
 ai-switch ask --provider openai "Explain neural networks"
+
+# Buffer the full response instead of streaming
+ai-switch ask --no-stream "Explain neural networks"
+
+# Emit a single JSON object for scripting (never streams)
+ai-switch ask --json --provider openai "What is the capital of France?"
 
 # Set primary and backup providers
 ai-switch ask --primary anthropic --backup openai "Write a poem"
@@ -125,9 +131,30 @@ ai-switch cache clear
 # List configured providers
 ai-switch providers
 
-# Start a multi-turn chat session (full history is sent each turn)
+# Start a multi-turn chat session (full history is sent each turn, replies stream in)
 ai-switch chat
 ```
+
+### Streaming
+
+`ai-switch ask` and `ai-switch chat` stream tokens as they arrive by default —
+no dead wait for the full response. Use `--no-stream` to get the old buffered
+behavior, and `--json` for a single machine-readable object:
+
+```bash
+# Buffered, prints a "Response:" block
+ai-switch ask --no-stream "Hello"
+
+# One JSON line: { provider, model, cache, usage, response }
+ai-switch ask --json "Hello"
+```
+
+Streaming works for every provider: OpenAI and Anthropic via their SSE streaming
+endpoints, Gemini via `streamGenerateContent?alt=sse`, and Ollama via its NDJSON
+`stream: true` mode. If a provider dies mid-stream, AI-Switch fails over to the
+next provider; the failed provider's partial text is never glued into the returned
+or cached response. Cache hits short-circuit the request, so a cached answer is
+shown in full without re-streaming.
 
 ## License
 
