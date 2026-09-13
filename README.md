@@ -1,6 +1,16 @@
 # AI-Switch
 
+[![CI](https://github.com/sagar0163/ai-switch/actions/workflows/ci.yml/badge.svg)](https://github.com/sagar0163/ai-switch/actions/workflows/ci.yml)
+
 A CLI tool that provides a unified interface for multiple AI LLM providers with automatic failover, cost tracking, and response caching.
+
+## Development
+
+```bash
+npm install
+npm test        # jest suite + coverage (>= 70% per file)
+npm run lint    # eslint on src/
+```
 
 ## Features
 

@@ -242,6 +242,13 @@ describe('parseRetryAfter', () => {
     expect(parseRetryAfter(null)).toBe(0);
   });
 
+  it('parses Date instances relative to the current time', () => {
+    const inTen = new Date(Date.now() + 10 * 1000);
+    expect(parseRetryAfter(inTen)).toBe(10);
+    const past = new Date(Date.now() - 5000);
+    expect(parseRetryAfter(past)).toBe(0);
+  });
+
   it('stores a parsed Retry-After on ProviderError', () => {
     const err = new ProviderError('nope', 'openai', 429, '300');
     expect(err.retryAfter).toBe(300);

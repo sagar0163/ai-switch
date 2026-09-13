@@ -93,6 +93,15 @@ describe('ConfigManager file precedence and overrides', () => {
       .toThrow('Failed to load config');
   });
 
+  it('set() creates intermediate directories when saving', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-switch-config-new-'));
+    const file = path.join(dir, 'deep', 'nested', 'config.json');
+    const config = new ConfigManager(file);
+    config.set('providers.openai.apiKey', 'sk-x');
+    expect(fs.existsSync(file)).toBe(true);
+    expect(new ConfigManager(file).get('providers.openai.apiKey')).toBe('sk-x');
+  });
+
   it('getProviderConfig returns provider sub-tree', () => {
     const config = new ConfigManager(tmpConfigFile({
       providers: { openai: { apiKey: 'k', model: 'm' } }

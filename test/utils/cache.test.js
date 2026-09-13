@@ -123,3 +123,54 @@ describe('CacheManager disabled mode', () => {
     await expect(cache.clear()).resolves.toBeUndefined();
   });
 });
+
+describe('CacheManager edge cases', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('creates the cache directory on construction when missing', () => {
+    const dir = path.join(tmpCacheDir(), 'nested', 'cache');
+    const cache = new CacheManager({ cacheDir: dir });
+    expect(fs.existsSync(dir)).toBe(true);
+    expect(cache.isEnabled()).toBe(true);
+  });
+
+  it('treats a corrupt cache entry as a miss', async () => {
+    const cache = makeCache();
+    await cache.set('a', '1', 'openai');
+    const file = path.join(cache.cacheDir, `${cache._getKey('a', 'openai')}.json`);
+    fs.writeFileSync(file, '{ not json', 'utf8');
+    expect(await cache.get('a', 'openai')).toBeNull();
+  });
+
+  it('wraps write failures in a CacheError', async () => {
+    const cache = makeCache();
+    jest.spyOn(fs, 'writeFileSync').mockImplementation(() => {
+      throw new Error('disk full');
+    });
+    await expect(cache.set('a', '1', 'openai')).rejects.toThrow(
+      /Failed to write cache: disk full/
+    );
+  });
+
+  it('surfaces clear() failures as a CacheError', async () => {
+    const cache = makeCache();
+    await cache.set('a', '1', 'openai');
+    jest.spyOn(fs, 'unlinkSync').mockImplementation(() => {
+      throw new Error('permission denied');
+    });
+    await expect(cache.clear()).rejects.toThrow(
+      /Failed to clear cache: permission denied/
+    );
+  });
+
+  it('getStats() reports zeros when the directory cannot be read', async () => {
+    const cache = makeCache();
+    jest.spyOn(fs, 'readdirSync').mockImplementation(() => {
+      throw new Error('gone');
+    });
+    const stats = cache.getStats();
+    expect(stats).toEqual({ entries: 0, maxSize: 1000, enabled: true });
+  });
+});

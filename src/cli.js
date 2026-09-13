@@ -120,16 +120,15 @@ program
   });
 
 // Cache command
-program
+const cacheCmd = program
   .command('cache')
   .description('Manage response cache')
-  .command('clear', 'Clear the response cache')
   .action(() => {
     console.log(chalk.yellow('Use: ai-switch cache clear'));
   });
 
-program
-  .command('cache clear')
+cacheCmd
+  .command('clear')
   .description('Clear the response cache')
   .action(async () => {
     const ai = getAISwitch();
@@ -180,8 +179,16 @@ program
   });
 
 // Default command - show help
-if (process.argv.length === 2) {
-  program.parse(['node', 'ai-switch', '--help']);
-} else {
-  program.parse(process.argv);
+function run(argv = process.argv) {
+  if (argv.length === 2) {
+    program.parse(['node', 'ai-switch', '--help']);
+  } else {
+    program.parse(argv);
+  }
 }
+
+if (require.main === module) {
+  run();
+}
+
+module.exports = { program, run, getAISwitch };

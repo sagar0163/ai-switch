@@ -102,6 +102,16 @@ describe('CostTracker real usage accounting', () => {
     expect(ollama).toMatchObject({ model: 'llama3.2', inputTokens: 96, outputTokens: 12 });
   });
 
+  it('returns zeroed usage for unknown provider names', () => {
+    expect(parseUsage('unknown-provider', {}, 'fallback-model')).toEqual({
+      model: 'fallback-model',
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0
+    });
+  });
+
   it('aggregates total tokens across providers', () => {
     const ct = new CostTracker({
       storagePath: path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ai-switch-agg-')), 'c.json')
@@ -198,6 +208,16 @@ describe('CostTracker cache hits', () => {
     ct.recordCacheHit('openai');
     expect(ct.getSummary().totalRequests).toBe(0);
   });
+
+  it('recordCacheHit creates an entry for a brand-new provider', () => {
+    const ct = tmpTracker();
+    ct.recordCacheHit('ollama');
+    const s = ct.getSummary();
+    expect(s.cacheHits).toBe(1);
+    expect(s.byProvider).toHaveLength(1);
+    expect(s.byProvider[0].provider).toBe('ollama');
+    expect(s.byProvider[0].cost).toBe(0);
+  });
 });
 
 describe('CostTracker persistence and reset', () => {
@@ -208,6 +228,22 @@ describe('CostTracker persistence and reset', () => {
     ct.record('openai', { model: 'gpt-4o', inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheCreationTokens: 0 });
     const reloaded = new CostTracker({ storagePath });
     expect(reloaded.getSummary().totalInputTokens).toBe(10);
+  });
+
+  it('auto-creates the storage directory', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-switch-per2-'));
+    const storagePath = path.join(dir, 'deep', 'nested', 'costs.json');
+    const ct = new CostTracker({ storagePath });
+    ct.record('openai', { model: 'gpt-4o', inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheCreationTokens: 0 });
+    expect(fs.existsSync(storagePath)).toBe(true);
+  });
+
+  it('starts fresh when the ledger file is corrupt', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-switch-per3-'));
+    const storagePath = path.join(dir, 'costs.json');
+    fs.writeFileSync(storagePath, '{ not json', 'utf8');
+    const ct = new CostTracker({ storagePath });
+    expect(ct.getSummary().totalRequests).toBe(0);
   });
 
   it('reset clears the ledger', () => {
