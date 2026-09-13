@@ -20,7 +20,7 @@
 
 - [x] 1. `src/utils/sse.js` — SSE/NDJSON parser (+ unit test)
 - [x] 2. BaseProvider + per-provider `stream()` for OpenAI/Anthropic/Google/Ollama
-- [ ] 3. `AISwitch.ask` streaming path (onToken/onResult, mid-stream failover, cache short-circuit)
+- [x] 3. `AISwitch.ask` streaming path (onToken/onResult, mid-stream failover, cache short-circuit)
 - [ ] 4. CLI `ask` streaming + `--no-stream` + `--json`; CLI `chat` streaming
 - [ ] 5. Unit tests: stream-concat == non-stream output, mid-stream failover, no stream on cache hit, --no-stream path
 - [ ] 6. README + CHANGELOG docs for streaming
