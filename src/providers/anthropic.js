@@ -39,7 +39,8 @@ class AnthropicProvider extends BaseProvider {
         throw new ProviderError(
           this._formatError({ message: error.error?.message || `HTTP ${response.status}` }),
           this.name,
-          response.status
+          response.status,
+          response.headers.get('retry-after')
         );
       }
 

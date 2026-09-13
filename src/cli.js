@@ -48,6 +48,8 @@ program
       const ai = getAISwitch();
       const response = await ai.ask(prompt, {
         provider: options.provider,
+        primary: options.primary,
+        backup: options.backup,
         model: options.model,
         temperature: options.temperature,
         maxTokens: options.maxTokens

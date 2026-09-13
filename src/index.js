@@ -18,13 +18,20 @@ class AISwitch {
   }
 
   /**
-   * Send a query to an AI provider
+   * Send a query to an AI provider, failing over in explicit order
    * @param {string} prompt - The prompt/question
    * @param {Object} options - Provider and request options
    * @returns {Promise<string>} The AI response
    */
   async ask(prompt, options = {}) {
-    const { provider: preferredProvider, model, temperature, maxTokens } = options;
+    const {
+      provider: preferredProvider,
+      primary,
+      backup,
+      model,
+      temperature,
+      maxTokens
+    } = options;
 
     // Check cache first
     if (this.cache.isEnabled()) {
@@ -34,38 +41,76 @@ class AISwitch {
       }
     }
 
-    // Get provider instance
-    const aiProvider = preferredProvider 
-      ? this.providers.getProvider(preferredProvider)
-      : this.providers.getBestAvailable();
+    const settings = this.providers.getFailoverSettings();
+    const failoverEnabled = settings.enabled || Boolean(primary) || Boolean(backup);
 
-    try {
-      const response = await aiProvider.complete(prompt, {
-        model: model || aiProvider.defaultModel,
-        temperature: temperature ?? 0.7,
-        maxTokens: maxTokens || 2048
-      });
+    // Ordered failover chain: preferred -> primary -> backup -> config chain -> default order
+    const providerOrder = this.providers.getOrder({
+      preferred: preferredProvider,
+      primary,
+      backup
+    });
 
-      // Cache the response
-      if (this.cache.isEnabled()) {
-        await this.cache.set(prompt, response, preferredProvider);
+    if (providerOrder.length === 0) {
+      throw new AIError('No AI providers configured. Please set up at least one provider.');
+    }
+
+    const candidates = failoverEnabled ? providerOrder : providerOrder.slice(0, 1);
+    let lastError = null;
+
+    for (let i = 0; i < candidates.length; i++) {
+      const provider = candidates[i];
+
+      // Skip providers stuck in their cooldown window (circuit open)
+      if (this.providers.isInCooldown(provider.name)) {
+        continue;
       }
 
-      // Track cost
-      this.costs.record(aiProvider.name, response);
-
-      return response;
-    } catch (error) {
-      // Handle failover
-      if (this.config.get('failover') && !options._retrying) {
-        const backup = this.providers.getBackup(aiProvider.name);
-        if (backup) {
-          console.warn(`Primary provider failed, trying backup: ${backup.name}`);
-          return this.ask(prompt, { ...options, provider: backup.name, _retrying: true });
+      // Next provider that will actually be attempted (not in cooldown)
+      let successor = null;
+      for (let j = i + 1; j < candidates.length; j++) {
+        if (!this.providers.isInCooldown(candidates[j].name)) {
+          successor = candidates[j];
+          break;
         }
       }
-      throw new AIError(`Failed to get response: ${error.message}`, aiProvider.name);
+
+      try {
+        const response = await provider.complete(prompt, {
+          model: model || provider.defaultModel,
+          temperature: temperature ?? 0.7,
+          maxTokens: maxTokens || 2048
+        });
+
+        this.providers.recordSuccess(provider.name);
+
+        // Cache the response
+        if (this.cache.isEnabled()) {
+          await this.cache.set(prompt, response, preferredProvider || provider.name);
+        }
+
+        // Track cost
+        this.costs.record(provider.name, response);
+
+        return response;
+      } catch (error) {
+        lastError = error;
+        const retryAfter = typeof error.retryAfter === 'number' && error.retryAfter > 0
+          ? error.retryAfter
+          : null;
+        this.providers.recordFailure(provider.name, retryAfter);
+
+        if (successor) {
+          const reason = retryAfter ? ` (Retry-After: ${retryAfter}s)` : '';
+          console.warn(`[ai-switch] Provider "${provider.name}" failed${reason}; failing over to "${successor.name}"`);
+        }
+      }
     }
+
+    throw new AIError(
+      `Failed to get response${lastError?.provider ? ` from ${lastError.provider}` : ''}: ${lastError?.message ?? 'all providers failed'}`,
+      lastError?.provider || 'unknown'
+    );
   }
 
   /**
