@@ -228,6 +228,150 @@ describe('AISwitch conversation history (messages path)', () => {
   });
 });
 
+describe('AISwitch streaming (issue #5)', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  async function fakeStream(provider, events) {
+    provider.stream = jest.fn(async function* () {
+      for (const evt of events) yield evt;
+    });
+  }
+
+  it('streams tokens through onToken and returns text equal to the buffered output', async () => {
+    const ai = buildAI();
+    ai.providers.providers.openai.complete.mockResolvedValue('Hello world');
+    await fakeStream(ai.providers.providers.openai, [
+      { delta: 'Hello' },
+      { delta: ' world' },
+      { done: true, text: 'Hello world', usage: { inputTokens: 2, outputTokens: 2 }, model: 'gpt-4' }
+    ]);
+
+    const collected = [];
+    const result = await ai.ask('hi', {
+      provider: 'openai',
+      stream: true,
+      onToken: (delta) => collected.push(delta)
+    });
+
+    expect(result).toBe('Hello world');
+    expect(collected.join('')).toBe('Hello world');
+    expect(ai.providers.providers.openai.complete).not.toHaveBeenCalled();
+    expect(ai.providers.providers.openai.stream).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the buffered complete() path when stream:false', async () => {
+    const ai = buildAI();
+    ai.providers.providers.openai.complete.mockResolvedValue('buffered');
+    await fakeStream(ai.providers.providers.openai, [{ done: true, text: 'should-not-run', usage: null }]);
+
+    const result = await ai.ask('hi', { provider: 'openai', stream: false });
+
+    expect(result).toBe('buffered');
+    expect(ai.providers.providers.openai.complete).toHaveBeenCalledTimes(1);
+    expect(ai.providers.providers.openai.stream).not.toHaveBeenCalled();
+  });
+
+  it('fails over mid-stream, discarding the failed provider partial text', async () => {
+    const ai = buildAI();
+    ai.providers.providers.openai.stream = jest.fn(async function* () {
+      yield { delta: 'par' };
+      throw new ProviderError('connection reset', 'openai', 500);
+    });
+    await fakeStream(ai.providers.providers.anthropic, [
+      { delta: 'full answer from anthropic' },
+      { done: true, text: 'full answer from anthropic', usage: null, model: 'claude' }
+    ]);
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const collected = [];
+    const result = await ai.ask('hi', {
+      provider: 'openai',
+      backup: 'anthropic',
+      stream: true,
+      onToken: (delta) => collected.push(delta)
+    });
+
+    // The returned text is the backup's output only — the failed provider's
+    // partial prefix is never glued into the result (onToken gets it, the
+    // buffered text does not).
+    expect(result).toBe('full answer from anthropic');
+    expect(result).not.toBe('parfull answer from anthropic');
+    expect(ai.providers.providers.openai.stream).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain('anthropic');
+  });
+
+  it('streams deltas to onToken across a failover hop', async () => {
+    const ai = buildAI();
+    ai.providers.providers.openai.stream = jest.fn(async function* () {
+      yield { delta: 'par' };
+      throw new ProviderError('reset', 'openai', 500);
+    });
+    await fakeStream(ai.providers.providers.google, [
+      { delta: 'clean from google' },
+      { done: true, text: 'clean from google', usage: null, model: 'gemini-pro' }
+    ]);
+
+    const collected = [];
+    await ai.ask('hi', {
+      provider: 'openai',
+      backup: 'google',
+      stream: true,
+      onToken: (delta) => collected.push(delta)
+    });
+
+    expect(collected.join('')).toBe('parclean from google');
+  });
+
+  it('a cache hit short-circuits without streaming', async () => {
+    const ai = buildAI({ cache: { enabled: true, ttl: 3600, maxSize: 100 } });
+    ai.cache.cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-switch-stream-cache-'));
+    ai.providers.providers.openai.complete.mockResolvedValue('cached answer');
+    await fakeStream(ai.providers.providers.openai, [
+      { delta: 'cached answer' },
+      { done: true, text: 'cached answer', usage: null, model: 'gpt-4' }
+    ]);
+
+    const first = await ai.ask('hi', { provider: 'openai', stream: true });
+    expect(first).toBe('cached answer');
+    expect(ai.cache.isEnabled()).toBe(true);
+
+    // Second call hits the cache: no network, no stream, no onToken.
+    const onToken = jest.fn();
+    const onResult = jest.fn();
+    const second = await ai.ask('hi', {
+      provider: 'openai',
+      stream: true,
+      onToken,
+      onResult
+    });
+
+    expect(second).toBe('cached answer');
+    expect(ai.providers.providers.openai.stream).toHaveBeenCalledTimes(1);
+    expect(onToken).not.toHaveBeenCalled();
+    expect(onResult).toHaveBeenCalledWith(expect.objectContaining({ cache: true }));
+  });
+
+  it('reports streamed usage via onResult for cost tracking', async () => {
+    const ai = buildAI();
+    await fakeStream(ai.providers.providers.openai, [
+      { delta: 'x' },
+      { done: true, text: 'x', usage: { inputTokens: 4, outputTokens: 1 }, model: 'gpt-4' }
+    ]);
+    const record = jest.spyOn(ai.costs, 'record');
+
+    await ai.ask('hi', { provider: 'openai', stream: true });
+
+    expect(record).toHaveBeenCalledWith(
+      'openai',
+      expect.objectContaining({ inputTokens: 4, outputTokens: 1 }),
+      expect.objectContaining({ model: 'gpt-4' })
+    );
+  });
+});
+
 describe('AISwitch Retry-After handling', () => {
   afterEach(() => {
     jest.restoreAllMocks();

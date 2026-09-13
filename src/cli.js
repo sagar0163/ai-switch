@@ -38,26 +38,84 @@ program
   .option('-M, --max-tokens <value>', 'Max tokens', parseInt)
   .option('--primary <provider>', 'Primary provider for failover')
   .option('--backup <provider>', 'Backup provider for failover')
+  .option('--no-stream', 'Buffer the full response instead of streaming tokens')
+  .option('-j, --json', 'Emit a single JSON object (disables streaming)')
   .action(async (prompt, options) => {
+    const ai = getAISwitch();
+    const jsonMode = Boolean(options.json);
+    const streamMode = !jsonMode && options.stream !== false;
+
+    const baseOptions = {
+      provider: options.provider,
+      primary: options.primary,
+      backup: options.backup,
+      model: options.model,
+      temperature: options.temperature,
+      maxTokens: options.maxTokens
+    };
+
+    if (streamMode) {
+      let started = false;
+      let meta = null;
+      process.stdout.write(chalk.dim('Assistant: ') + '\n');
+
+      try {
+        await ai.ask(prompt, {
+          ...baseOptions,
+          stream: true,
+          onToken: (delta) => {
+            started = true;
+            process.stdout.write(delta);
+          },
+          onResult: (r) => {
+            meta = r;
+            if (r.cache && !started) {
+              started = true;
+              process.stdout.write(r.text);
+            }
+          }
+        });
+        process.stdout.write('\n');
+        if (meta) {
+          const tag = meta.cache
+            ? 'cache hit'
+            : `via ${meta.provider} (${meta.model})`;
+          console.log(chalk.dim(`\n[${tag}]`));
+        }
+      } catch (error) {
+        if (started) process.stdout.write('\n');
+        console.error(chalk.red('Error:'), error.message);
+        process.exit(1);
+      }
+      return;
+    }
+
     const spinner = ora({
       text: 'Thinking...',
       spinner: 'dots'
     }).start();
+    let metaResult = null;
 
     try {
-      const ai = getAISwitch();
       const response = await ai.ask(prompt, {
-        provider: options.provider,
-        primary: options.primary,
-        backup: options.backup,
-        model: options.model,
-        temperature: options.temperature,
-        maxTokens: options.maxTokens
+        ...baseOptions,
+        onResult: (r) => { metaResult = r; }
       });
 
       spinner.stop();
-      console.log('\n' + chalk.green('Response:'));
-      console.log(response);
+
+      if (jsonMode) {
+        process.stdout.write(JSON.stringify({
+          provider: metaResult?.provider ?? null,
+          model: metaResult?.model ?? null,
+          cache: metaResult?.cache ?? false,
+          usage: metaResult?.usage ?? null,
+          response
+        }) + '\n');
+      } else {
+        console.log('\n' + chalk.green('Response:'));
+        console.log(response);
+      }
     } catch (error) {
       spinner.stop();
       console.error(chalk.red('Error:'), error.message);
@@ -143,6 +201,7 @@ program
   .description('Start an interactive chat session')
   .option('-p, --provider <name>', 'Specific provider to use (openai, anthropic, etc.)')
   .option('-m, --model <model>', 'Specific model to use')
+  .option('--no-stream', 'Buffer the full response instead of streaming tokens')
   .action((options) => {
     console.log(chalk.bold('\nAI Chat Mode (type "exit" to quit)\n'));
 
@@ -164,20 +223,22 @@ program
 
         session.addUser(prompt);
 
-        const spinner = ora('Thinking...').start();
         const { messages, turns, tokens } = session.nextRequest();
         console.log(chalk.dim(`  ↪ sending ${turns} turn${turns === 1 ? '' : 's'} (~${tokens.toLocaleString()} tokens)`));
+
+        process.stdout.write(chalk.green('AI: '));
 
         try {
           const response = await ai.ask(messages, {
             provider: options.provider,
-            model: options.model
+            model: options.model,
+            stream: options.stream !== false,
+            onToken: (delta) => process.stdout.write(delta)
           });
           session.addAssistant(response);
-          spinner.stop();
-          console.log(chalk.green('AI: ') + response + '\n');
+          process.stdout.write('\n\n');
         } catch (error) {
-          spinner.stop();
+          process.stdout.write('\n');
           console.error(chalk.red('Error:'), error.message + '\n');
         }
         askQuestion();
