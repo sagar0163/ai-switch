@@ -38,28 +38,61 @@ program
   .option('-M, --max-tokens <value>', 'Max tokens', parseInt)
   .option('--primary <provider>', 'Primary provider for failover')
   .option('--backup <provider>', 'Backup provider for failover')
+  .option('-j, --json', 'Output raw JSON (non-streaming, for scripting)')
+  .option('--no-stream', 'Disable token streaming (buffered response)')
   .action(async (prompt, options) => {
-    const spinner = ora({
-      text: 'Thinking...',
-      spinner: 'dots'
-    }).start();
+    const ai = getAISwitch();
+    const json = Boolean(options.json);
+    const streaming = !json && options.stream !== false;
+
+    const request = {
+      provider: options.provider,
+      primary: options.primary,
+      backup: options.backup,
+      model: options.model,
+      temperature: options.temperature,
+      maxTokens: options.maxTokens
+    };
+
+    let spinner;
+    if (!json) {
+      spinner = ora({ text: 'Thinking...', spinner: 'dots' }).start();
+    }
+
+    let sawToken = false;
+    const emitToken = (delta) => {
+      if (spinner && spinner.isSpinning) spinner.stop();
+      sawToken = true;
+      process.stdout.write(delta);
+    };
 
     try {
-      const ai = getAISwitch();
       const response = await ai.ask(prompt, {
-        provider: options.provider,
-        primary: options.primary,
-        backup: options.backup,
-        model: options.model,
-        temperature: options.temperature,
-        maxTokens: options.maxTokens
+        ...request,
+        stream: streaming,
+        json,
+        onToken: streaming ? emitToken : undefined
       });
 
-      spinner.stop();
-      console.log('\n' + chalk.green('Response:'));
-      console.log(response);
+      if (json) {
+        if (spinner) spinner.stop();
+        console.log(JSON.stringify(response, null, 2));
+      } else if (streaming) {
+        if (spinner && spinner.isSpinning) spinner.stop();
+        if (sawToken) {
+          process.stdout.write('\n');
+        } else {
+          // Cache hit (or provider didn't stream): print the full response.
+          console.log('\n' + chalk.green('Response:'));
+          console.log(response);
+        }
+      } else {
+        spinner.stop();
+        console.log('\n' + chalk.green('Response:'));
+        console.log(response);
+      }
     } catch (error) {
-      spinner.stop();
+      if (spinner) spinner.stop();
       console.error(chalk.red('Error:'), error.message);
       process.exit(1);
     }
@@ -143,6 +176,7 @@ program
   .description('Start an interactive chat session')
   .option('-p, --provider <name>', 'Specific provider to use (openai, anthropic, etc.)')
   .option('-m, --model <model>', 'Specific model to use')
+  .option('--no-stream', 'Disable token streaming (buffered response)')
   .action((options) => {
     console.log(chalk.bold('\nAI Chat Mode (type "exit" to quit)\n'));
 
@@ -154,6 +188,7 @@ program
 
     const ai = getAISwitch();
     const session = ai.createChatSession();
+    const streaming = options.stream !== false;
 
     const askQuestion = () => {
       rl.question(chalk.cyan('You: '), async (prompt) => {
@@ -168,14 +203,34 @@ program
         const { messages, turns, tokens } = session.nextRequest();
         console.log(chalk.dim(`  ↪ sending ${turns} turn${turns === 1 ? '' : 's'} (~${tokens.toLocaleString()} tokens)`));
 
+        let sawToken = false;
+        const emitToken = (delta) => {
+          if (spinner.isSpinning) spinner.stop();
+          sawToken = true;
+          process.stdout.write(delta);
+        };
+
         try {
           const response = await ai.ask(messages, {
             provider: options.provider,
-            model: options.model
+            model: options.model,
+            stream: streaming,
+            onToken: streaming ? emitToken : undefined
           });
+
           session.addAssistant(response);
-          spinner.stop();
-          console.log(chalk.green('AI: ') + response + '\n');
+
+          if (streaming) {
+            if (spinner.isSpinning) spinner.stop();
+            if (sawToken) {
+              process.stdout.write('\n');
+            } else {
+              console.log(chalk.green('AI: ') + response + '\n');
+            }
+          } else {
+            spinner.stop();
+            console.log(chalk.green('AI: ') + response + '\n');
+          }
         } catch (error) {
           spinner.stop();
           console.error(chalk.red('Error:'), error.message + '\n');
