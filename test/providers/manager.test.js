@@ -33,6 +33,64 @@ function fakeConfig(overrides = {}) {
   };
 }
 
+describe('ProviderManager availability', () => {
+  it('only initializes providers that have credentials', () => {
+    const pm = new ProviderManager(fakeConfig({
+      providers: {
+        openai: { apiKey: '', model: 'm' },
+        anthropic: { apiKey: 'k', model: 'm' },
+        google: { apiKey: 'k', model: 'm' }
+      }
+    }), null, null);
+
+    expect(Object.keys(pm.providers)).toEqual(['anthropic', 'google']);
+    expect(pm.getOrder().map((p) => p.name)).toEqual(['anthropic', 'google']);
+  });
+
+  it('getProvider returns a configured provider and throws for unknown names', () => {
+    const pm = new ProviderManager(fakeConfig(), null, null);
+    expect(pm.getProvider('openai').name).toBe('openai');
+    expect(() => pm.getProvider('nope')).toThrow('not configured');
+  });
+
+  it('listProviders reports names, models, and the default flag', () => {
+    const pm = new ProviderManager(fakeConfig(), null, null);
+    const list = pm.listProviders();
+    expect(list.map((p) => p.name)).toEqual(['openai', 'anthropic', 'google']);
+    expect(list.every((p) => p.available)).toBe(true);
+    expect(list.find((p) => p.name === 'openai').isDefault).toBe(true);
+    expect(list.find((p) => p.name === 'anthropic').isDefault).toBe(false);
+  });
+
+  it('getBestAvailable throws when no providers are configured', () => {
+    const pm = new ProviderManager(fakeConfig({ providers: {} }), null, null);
+    expect(() => pm.getBestAvailable()).toThrow('No AI providers configured');
+  });
+});
+
+describe('ProviderManager failover settings', () => {
+  it('normalizes boolean, array, and object forms with safe fallbacks', () => {
+    const asDefault = new ProviderManager(fakeConfig({ failover: undefined }), null, null)
+      .getFailoverSettings();
+    expect(asDefault).toMatchObject({ enabled: true, order: [], maxFailures: 3, cooldownSeconds: 60 });
+
+    const disabled = new ProviderManager(fakeConfig({ failover: false }), null, null)
+      .getFailoverSettings();
+    expect(disabled.enabled).toBe(false);
+
+    const arr = new ProviderManager(fakeConfig({ failover: ['google'] }), null, null)
+      .getFailoverSettings();
+    expect(arr).toMatchObject({ enabled: true, order: ['google'] });
+
+    const obj = new ProviderManager(
+      fakeConfig({ failover: { enabled: false, maxFailures: -1, cooldownSeconds: 0 } }),
+      null,
+      null
+    ).getFailoverSettings();
+    expect(obj).toMatchObject({ enabled: false, maxFailures: 3, cooldownSeconds: 60 });
+  });
+});
+
 describe('ProviderManager ordering', () => {
   it('resolves default order with defaultProvider first, then insertion order', () => {
     const pm = new ProviderManager(fakeConfig(), null, null);

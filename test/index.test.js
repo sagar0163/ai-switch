@@ -185,3 +185,90 @@ describe('AISwitch Retry-After handling', () => {
     expect(ai.providers.providers.anthropic.complete).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('AISwitch _retrying guard', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('shares a single underlying attempt across overlapping ask() calls', async () => {
+    const ai = buildAI();
+    let resolveComplete;
+    ai.providers.providers.openai.complete.mockReturnValue(
+      new Promise((resolve) => { resolveComplete = resolve; })
+    );
+
+    const first = ai.ask('hi');
+    const second = ai.ask('hi');
+    expect(ai.providers.providers.openai.complete).toHaveBeenCalledTimes(1);
+
+    resolveComplete('shared result');
+    expect(await first).toBe('shared result');
+    expect(await second).toBe('shared result');
+    expect(ai.providers.providers.openai.complete).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears the guard after completion so subsequent asks run again', async () => {
+    const ai = buildAI();
+    ai.providers.providers.openai.complete.mockResolvedValue('one');
+    expect(await ai.ask('first')).toBe('one');
+
+    ai.providers.providers.openai.complete.mockResolvedValue('two');
+    expect(await ai.ask('second')).toBe('two');
+    expect(ai.providers.providers.openai.complete).toHaveBeenCalledTimes(2);
+  });
+
+  it('clears the guard after a failed attempt', async () => {
+    const ai = buildAI({ failover: false });
+    ai.providers.providers.openai.complete
+      .mockRejectedValue(new ProviderError('down', 'openai', 500));
+
+    await expect(ai.ask('first', { provider: 'openai' })).rejects.toThrow('down');
+
+    ai.providers.providers.openai.complete.mockResolvedValue('recovered');
+    await expect(ai.ask('second', { provider: 'openai' })).resolves.toBe('recovered');
+  });
+});
+
+describe('AISwitch caching and cost tracking', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('serves a cached response on a second identical ask()', async () => {
+    const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-switch-idx-cache-'));
+    const ai = buildAI({ cache: { enabled: true, ttl: 3600, maxSize: 100, cacheDir } });
+    ai.providers.providers.openai.complete.mockResolvedValue('fresh');
+
+    expect(await ai.ask('cache me', { provider: 'openai' })).toBe('fresh');
+    expect(ai.providers.providers.openai.complete).toHaveBeenCalledTimes(1);
+
+    expect(await ai.ask('cache me', { provider: 'openai' })).toBe('fresh');
+    expect(ai.providers.providers.openai.complete).toHaveBeenCalledTimes(1);
+  });
+
+  it('records provider usage after a successful ask()', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-switch-idx-cost-'));
+    const ai = buildAI({
+      costTracking: { enabled: true, storagePath: path.join(dir, 'costs.json') }
+    });
+    ai.providers.providers.openai.complete.mockResolvedValue({
+      text: 'priced',
+      usage: {
+        model: 'gpt-4o',
+        inputTokens: 1000,
+        outputTokens: 500,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0
+      }
+    });
+
+    expect(await ai.ask('hi')).toBe('priced');
+    const summary = ai.getCosts();
+    expect(summary.totalRequests).toBe(1);
+    expect(summary.totalInputTokens).toBe(1000);
+    expect(summary.totalOutputTokens).toBe(500);
+    expect(summary.byProvider[0].provider).toBe('openai');
+    expect(ai.listProviders().length).toBe(3);
+  });
+});

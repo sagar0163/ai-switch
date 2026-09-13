@@ -156,6 +156,24 @@ describe('CostTracker pricing lookup fallbacks', () => {
     expect(costs.inputCost).toBe(0);
     expect(costs.outputCost).toBe(0);
   });
+
+  it('supports bare-model and nested provider-model config overrides', () => {
+    const bare = tmpTracker({ pricing: { 'gpt-4o': { input: 1, output: 2 } } });
+    bare.record('openai', { model: 'gpt-4o', inputTokens: 1e6, outputTokens: 1e6, cacheReadTokens: 0, cacheCreationTokens: 0 });
+    expect(bare.getSummary().byProvider[0].cost).toBeCloseTo(3, 8);
+
+    const nested = tmpTracker({ pricing: { openai: { 'gpt-4o': { input: 4, output: 8 } } } });
+    nested.record('openai', { model: 'gpt-4o', inputTokens: 1e6, outputTokens: 1e6, cacheReadTokens: 0, cacheCreationTokens: 0 });
+    expect(nested.getSummary().byProvider[0].cost).toBeCloseTo(12, 8);
+  });
+
+  it('prices cache-read tokens using the cacheRead rate', () => {
+    const ct = tmpTracker();
+    ct.record('openai', { model: 'gpt-4o', inputTokens: 0, outputTokens: 0, cacheReadTokens: 1000, cacheCreationTokens: 0 });
+    const s = ct.getSummary();
+    expect(s.totalCacheReadTokens).toBe(1000);
+    expect(s.byProvider[0].cacheReadCost).toBeCloseTo((1000 / 1e6) * 1.25, 8);
+  });
 });
 
 describe('CostTracker cache hits', () => {
