@@ -18,12 +18,26 @@ class AISwitch {
   }
 
   /**
-   * Send a query to an AI provider, failing over in explicit order
+   * Send a query to an AI provider, failing over in explicit order.
+   * Concurrent invocations share a single underlying attempt chain.
    * @param {string} prompt - The prompt/question
    * @param {Object} options - Provider and request options
    * @returns {Promise<string>} The AI response
    */
   async ask(prompt, options = {}) {
+    if (this._retrying) return this._retrying;
+    this._retrying = this._doAsk(prompt, options);
+    try {
+      return await this._retrying;
+    } finally {
+      this._retrying = null;
+    }
+  }
+
+  /**
+   * Core ask() logic: cache lookup, ordered failover loop, cost tracking.
+   */
+  async _doAsk(prompt, options = {}) {
     const {
       provider: preferredProvider,
       primary,

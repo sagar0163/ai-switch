@@ -14,7 +14,7 @@ class CacheManager {
     this.enabled = options.enabled !== false;
     this.ttl = options.ttl || 3600; // seconds
     this.maxSize = options.maxSize || 1000;
-    this.cacheDir = path.join(os.homedir(), '.ai-switch', 'cache');
+    this.cacheDir = options.cacheDir || path.join(os.homedir(), '.ai-switch', 'cache');
     
     if (this.enabled && !fs.existsSync(this.cacheDir)) {
       fs.mkdirSync(this.cacheDir, { recursive: true });
