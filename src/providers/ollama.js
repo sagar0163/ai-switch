@@ -35,7 +35,9 @@ class OllamaProvider extends BaseProvider {
 
   async complete(prompt, options = {}) {
     const model = options.model || this.defaultModel;
-    
+    const messages = options.messages || [{ role: 'user', content: prompt }];
+    const isChat = Array.isArray(options.messages) && options.messages.length > 0;
+
     try {
       // Check availability first
       const available = await this.isAvailable();
@@ -46,12 +48,19 @@ class OllamaProvider extends BaseProvider {
         );
       }
 
-      const response = await fetch(`${this.baseUrl}/api/generate`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
+      // Full history goes through the chat endpoint; a single prompt stays on /api/generate
+      const endpoint = isChat ? `${this.baseUrl}/api/chat` : `${this.baseUrl}/api/generate`;
+      const body = isChat
+        ? {
+          model,
+          messages,
+          stream: false,
+          options: {
+            temperature: options.temperature ?? 0.7,
+            num_predict: options.maxTokens || 2048
+          }
+        }
+        : {
           model,
           prompt,
           stream: false,
@@ -59,7 +68,14 @@ class OllamaProvider extends BaseProvider {
             temperature: options.temperature ?? 0.7,
             num_predict: options.maxTokens || 2048
           }
-        })
+        };
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(body)
       });
 
       if (!response.ok) {
@@ -73,13 +89,14 @@ class OllamaProvider extends BaseProvider {
       }
 
       const data = await response.json();
-      
-      if (!data.response) {
+      const text = isChat ? data.message?.content : data.response;
+
+      if (!text) {
         throw new ProviderError('No response from Ollama', this.name);
       }
 
       return {
-        text: data.response.trim(),
+        text: text.trim(),
         usage: parseOllamaUsage(data)
       };
     } catch (error) {

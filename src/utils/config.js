@@ -47,6 +47,10 @@ class ConfigManager {
         ttl: 3600,
         maxSize: 1000
       },
+      chat: {
+        maxTurns: 20,
+        maxContextTokens: 4000
+      },
       failover: true,
       costTracking: {
         enabled: true,

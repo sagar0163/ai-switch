@@ -25,6 +25,10 @@
     "ttl": 3600,
     "maxSize": 1000
   },
+  "chat": {
+    "maxTurns": 20,
+    "maxContextTokens": 4000
+  },
   "failover": {
     "enabled": true,
     "order": ["openai", "anthropic", "google"],

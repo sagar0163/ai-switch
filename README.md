@@ -53,6 +53,30 @@ Create `~/.ai-switch/config.json`:
 A provider that replies with a `Retry-After` header is backed off for that window immediately.
 The `--primary`/`--backup` flags override the configured order for a single call.
 
+### Chat mode & conversation history
+
+`ai-switch chat` keeps the full conversation and sends it to the provider on every
+turn, so the model can reference earlier messages. History is capped before it is
+sent to keep requests from ballooning:
+
+```json
+{
+  "chat": {
+    "maxTurns": 20,
+    "maxContextTokens": 4000
+  }
+}
+```
+
+- `maxTurns` — the most recent user turns that are kept (default: `20`). Older
+  full user→assistant pairs are dropped; a leading `system` message is preserved.
+- `maxContextTokens` — an approximate combined-token budget for the request
+  (rough estimate of `chars / 4` per message, not a billing number; default: `4000`).
+  The oldest non-system messages are trimmed until the estimate fits.
+
+Each turn prints a small indicator of what is being sent, e.g.
+`↪ sending 3 turns (~1,240 tokens)`.
+
 ### Cost tracking & pricing
 
 Costs are computed from the real token `usage` the providers return with every
@@ -100,6 +124,9 @@ ai-switch cache clear
 
 # List configured providers
 ai-switch providers
+
+# Start a multi-turn chat session (full history is sent each turn)
+ai-switch chat
 ```
 
 ## License

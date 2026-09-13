@@ -17,7 +17,8 @@ class OpenAIProvider extends BaseProvider {
 
   async complete(prompt, options = {}) {
     const model = options.model || this.defaultModel;
-    
+    const messages = options.messages || [{ role: 'user', content: prompt }];
+
     try {
       const response = await fetch(`${this.baseUrl}/chat/completions`, {
         method: 'POST',
@@ -27,7 +28,7 @@ class OpenAIProvider extends BaseProvider {
         },
         body: JSON.stringify({
           model,
-          messages: [{ role: 'user', content: prompt }],
+          messages,
           temperature: options.temperature ?? 0.7,
           max_tokens: options.maxTokens || 2048
         })

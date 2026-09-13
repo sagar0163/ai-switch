@@ -8,6 +8,8 @@ const { CacheManager } = require('./utils/cache');
 const { CostTracker } = require('./utils/costTracker');
 const { ProviderManager } = require('./providers/manager');
 const { AIError } = require('./utils/errors');
+const { normalizeMessages, trimMessages } = require('./utils/messages');
+const { ChatSession } = require('./utils/chatSession');
 
 class AISwitch {
   constructor(options = {}) {
@@ -15,15 +17,27 @@ class AISwitch {
     this.cache = new CacheManager(this.config.get('cache'));
     this.costs = new CostTracker(this.config.get('costTracking'));
     this.providers = new ProviderManager(this.config, this.cache, this.costs);
+    this.chatConfig = this.config.get('chat') || {};
   }
 
   /**
-   * Send a query to an AI provider, failing over in explicit order
-   * @param {string} prompt - The prompt/question
+   * Create a chat session wired to the configured history caps.
+   * @param {Object} [options] - Overrides for maxTurns / maxContextTokens
+   * @returns {ChatSession}
+   */
+  createChatSession(options = {}) {
+    return new ChatSession({ ...this.chatConfig, ...options });
+  }
+
+  /**
+   * Send a query to an AI provider, failing over in explicit order.
+   * Accepts a flat prompt string (single-shot) or a full messages array
+   * (system/user/assistant) for multi-turn chat.
+   * @param {string|Array} request - Prompt string or messages array
    * @param {Object} options - Provider and request options
    * @returns {Promise<string>} The AI response
    */
-  async ask(prompt, options = {}) {
+  async ask(request, options = {}) {
     const {
       provider: preferredProvider,
       primary,
@@ -33,9 +47,19 @@ class AISwitch {
       maxTokens
     } = options;
 
+    const messages = normalizeMessages(request);
+    const currentPrompt = messages[messages.length - 1].content;
+    const trimmed = trimMessages(messages, {
+      maxTurns: options.maxTurns ?? this.chatConfig.maxTurns,
+      maxContextTokens: options.maxContextTokens ?? this.chatConfig.maxContextTokens
+    });
+
+    // Cache key covers the full context (flat prompt or serialized history)
+    const cacheKey = typeof request === 'string' ? request : JSON.stringify(trimmed);
+
     // Check cache first
     if (this.cache.isEnabled()) {
-      const cached = await this.cache.get(prompt, preferredProvider);
+      const cached = await this.cache.get(cacheKey, preferredProvider);
       if (cached) {
         this.costs.recordCacheHit(preferredProvider || 'cache');
         return cached;
@@ -78,10 +102,11 @@ class AISwitch {
 
       try {
         const requestedModel = model || provider.defaultModel;
-        const result = await provider.complete(prompt, {
+        const result = await provider.complete(currentPrompt, {
           model: requestedModel,
           temperature: temperature ?? 0.7,
-          maxTokens: maxTokens || 2048
+          maxTokens: maxTokens || 2048,
+          messages: trimmed
         });
 
         this.providers.recordSuccess(provider.name);
@@ -91,7 +116,7 @@ class AISwitch {
 
         // Cache the response
         if (this.cache.isEnabled()) {
-          await this.cache.set(prompt, text, preferredProvider || provider.name);
+          await this.cache.set(cacheKey, text, preferredProvider || provider.name);
         }
 
         // Track cost from real provider usage
