@@ -44,7 +44,10 @@ class AISwitch {
       backup,
       model,
       temperature,
-      maxTokens
+      maxTokens,
+      stream = false,
+      onToken = null,
+      json = false
     } = options;
 
     const messages = normalizeMessages(request);
@@ -57,12 +60,13 @@ class AISwitch {
     // Cache key covers the full context (flat prompt or serialized history)
     const cacheKey = typeof request === 'string' ? request : JSON.stringify(trimmed);
 
-    // Check cache first
+    // Streaming composes with caching: a cache hit short-circuits without streaming,
+    // since the full response is already known.
     if (this.cache.isEnabled()) {
       const cached = await this.cache.get(cacheKey, preferredProvider);
       if (cached) {
         this.costs.recordCacheHit(preferredProvider || 'cache');
-        return cached;
+        return json ? { text: cached, provider: preferredProvider || 'cache', usage: null } : cached;
       }
     }
 
@@ -102,12 +106,15 @@ class AISwitch {
 
       try {
         const requestedModel = model || provider.defaultModel;
-        const result = await provider.complete(currentPrompt, {
+        const method = stream && typeof provider.streamComplete === 'function'
+          ? provider.streamComplete.bind(provider)
+          : provider.complete.bind(provider);
+        const result = await method(currentPrompt, {
           model: requestedModel,
           temperature: temperature ?? 0.7,
           maxTokens: maxTokens || 2048,
           messages: trimmed
-        });
+        }, onToken);
 
         this.providers.recordSuccess(provider.name);
 
@@ -122,13 +129,24 @@ class AISwitch {
         // Track cost from real provider usage
         this.costs.record(provider.name, usage, { model: requestedModel });
 
-        return text;
+        return json
+          ? { text, provider: provider.name, model: requestedModel, usage }
+          : text;
       } catch (error) {
         lastError = error;
         const retryAfter = typeof error.retryAfter === 'number' && error.retryAfter > 0
           ? error.retryAfter
           : null;
         this.providers.recordFailure(provider.name, retryAfter);
+
+        // If some tokens already streamed to the user, do NOT fail over: splicing
+        // another provider's text onto the partial output would dump garbage.
+        if (error.partial) {
+          throw new AIError(
+            `Stream from "${provider.name}" failed mid-stream after partial output: ${error.message}`,
+            provider.name
+          );
+        }
 
         if (successor) {
           const reason = retryAfter ? ` (Retry-After: ${retryAfter}s)` : '';
