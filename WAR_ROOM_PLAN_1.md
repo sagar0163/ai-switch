@@ -7,6 +7,6 @@
 - [x] Add `retryAfter` support: `ProviderError.retryAfter` field + `Retry-After` header parsing; capture header in openai/anthropic/google/ollama providers
 - [x] Rewrite `AISwitch.ask()` to iterate an explicit provider order, skip cooldown providers, honor `Retry-After`, and emit a single failover warning per hop
 - [x] Thread `--primary`/`--backup` from `src/cli.js` into `ask()`
-- [ ] Unit tests: ordering, cooldown expiry, Retry-After handling, `ask --primary openai --backup anthropic` fails over to backup on mocked failure
-- [ ] `npm test` + `npm run lint` green
+- [x] Unit tests: ordering, cooldown expiry, Retry-After handling, `ask --primary openai --backup anthropic` fails over to backup on mocked failure
+- [x] `npm test` + `npm run lint` green
 - [ ] Final commit (rm plan file) + push `war-room-issue-1`
