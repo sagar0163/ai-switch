@@ -7,6 +7,8 @@ const { OpenAIProvider } = require('./openai');
 const { AnthropicProvider } = require('./anthropic');
 const { GoogleProvider } = require('./google');
 const { OllamaProvider } = require('./ollama');
+const { getModelTier, meetsTier } = require('../utils/capabilities');
+const { getPricing } = require('../utils/pricing');
 
 const DEFAULT_MAX_FAILURES = 3;
 const DEFAULT_COOLDOWN_SECONDS = 60;
@@ -108,13 +110,92 @@ class ProviderManager {
     return order.map((name) => this.providers[name]);
   }
 
-  getBestAvailable() {
+  getBestAvailable(prompt = null, tier = null) {
+    const rationale = {
+      evaluated: [],
+      decision: null,
+      reason: null
+    };
+    
+    const configBudgets = this.config.get('costTracking.budgets');
+    
+    // Check total budget hard limit before any routing
+    if (this.costs) {
+      const totalBudgetStatus = this.costs.checkBudget(configBudgets, null);
+      if (!totalBudgetStatus.allowed) {
+        throw new Error(totalBudgetStatus.reason || 'Total budget exceeded');
+      }
+    }
+
     const ordered = this.getOrder();
     if (ordered.length === 0) {
       throw new Error('No AI providers configured. Please set up at least one provider.');
     }
-    return ordered[0];
+
+    // Routing engine: find the cheapest eligible provider
+    let bestProvider = null;
+    let minCost = Infinity;
+
+    for (const provider of ordered) {
+      const model = provider.defaultModel;
+      const modelTier = getModelTier(model);
+      const isCooldown = this.isInCooldown(provider.name);
+      
+      let pBudgetStatus = { allowed: true };
+      if (this.costs) {
+        pBudgetStatus = this.costs.checkBudget(configBudgets, provider.name);
+      }
+
+      const pricing = getPricing(provider.name, model);
+      let costScore = 999999;
+      if (pricing && pricing.known) {
+        costScore = pricing.input + pricing.output;
+      }
+
+      const providerInfo = {
+        provider: provider.name,
+        model,
+        tier: modelTier,
+        costScore,
+        cooldown: isCooldown,
+        budgetAllowed: pBudgetStatus.allowed,
+        eligible: false
+      };
+
+      if (isCooldown) {
+        providerInfo.reason = 'In cooldown';
+      } else if (!pBudgetStatus.allowed) {
+        providerInfo.reason = pBudgetStatus.reason || 'Provider budget exceeded';
+      } else if (!meetsTier(modelTier, tier)) {
+        providerInfo.reason = `Tier ${modelTier} does not meet required ${tier}`;
+      } else {
+        providerInfo.eligible = true;
+        providerInfo.reason = 'Eligible';
+        if (costScore < minCost) {
+          minCost = costScore;
+          bestProvider = provider;
+        }
+      }
+
+      rationale.evaluated.push(providerInfo);
+    }
+
+    // Default to the first provider if no prompt/tier specified and no routing match
+    if (!bestProvider && !prompt && !tier) {
+      bestProvider = ordered[0];
+      rationale.reason = 'Default fallback used (no prompt/tier criteria matched)';
+    }
+
+    if (!bestProvider) {
+      throw new Error('No available providers meet the routing criteria and budget limits.');
+    }
+
+    rationale.decision = bestProvider.name;
+    bestProvider.rationale = rationale;
+    
+    return bestProvider;
   }
+
 
   /**
    * Get the first backup provider, honoring an explicit provider order when given.
@@ -191,13 +272,24 @@ class ProviderManager {
 
   listProviders() {
     const defaultProvider = this.config.get('defaultProvider');
+    
+    let costsSummary = { byProvider: [] };
+    if (this.costs) {
+      costsSummary = this.costs.getSummary();
+    }
 
-    return Object.entries(this.providers).map(([name, provider]) => ({
-      name,
-      model: provider.defaultModel,
-      available: true,
-      isDefault: name === defaultProvider
-    }));
+    return Object.entries(this.providers).map(([name, provider]) => {
+      const pStats = costsSummary.byProvider.find(p => p.provider === name);
+      return {
+        name,
+        model: provider.defaultModel,
+        available: true,
+        isDefault: name === defaultProvider,
+        inCooldown: this.isInCooldown(name),
+        cooldownRemaining: this.getCooldownRemaining(name),
+        lastCost: pStats ? pStats.cost : 0
+      };
+    });
   }
 }
 

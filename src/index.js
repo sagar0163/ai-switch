@@ -69,18 +69,45 @@ class AISwitch {
     const settings = this.providers.getFailoverSettings();
     const failoverEnabled = settings.enabled || Boolean(primary) || Boolean(backup);
 
-    // Ordered failover chain: preferred -> primary -> backup -> config chain -> default order
-    const providerOrder = this.providers.getOrder({
-      preferred: preferredProvider,
-      primary,
-      backup
-    });
-
-    if (providerOrder.length === 0) {
+    let candidates = [];
+    
+    // Cost-aware Routing
+    let routingRationale = null;
+    if (!preferredProvider && !primary && !backup) {
+      const best = this.providers.getBestAvailable(currentPrompt, options.tier);
+      routingRationale = best.rationale;
+      if (options.explain) {
+        console.log('\n--- Routing Decision ---');
+        console.log(`Decision: ${routingRationale.decision}`);
+        console.log(`Reason: ${routingRationale.reason}`);
+        console.log('Evaluated Providers:');
+        routingRationale.evaluated.forEach(p => {
+           console.log(`  - ${p.provider} (${p.model}): tier=${p.tier}, cost=${p.costScore === 999999 ? 'Unknown' : p.costScore}, eligible=${p.eligible}, reason=${p.reason}`);
+        });
+        console.log('------------------------\n');
+      }
+      candidates = [best];
+      
+      if (failoverEnabled) {
+        // Add backups, excluding the best provider
+        const backups = this.providers.getOrder().filter(p => p.name !== best.name);
+        candidates = candidates.concat(backups);
+      }
+    } else {
+      candidates = this.providers.getOrder({
+        preferred: preferredProvider,
+        primary,
+        backup
+      });
+      if (!failoverEnabled) {
+        candidates = candidates.slice(0, 1);
+      }
+    }
+    
+    if (candidates.length === 0) {
       throw new AIError('No AI providers configured. Please set up at least one provider.');
     }
 
-    const candidates = failoverEnabled ? providerOrder : providerOrder.slice(0, 1);
     let lastError = null;
 
     for (let i = 0; i < candidates.length; i++) {

@@ -33,6 +33,8 @@ program
   .command('ask <prompt>')
   .description('Ask an AI provider a question')
   .option('-p, --provider <name>', 'Specific provider to use (openai, anthropic, etc.)')
+  .option('--tier <tier>', 'Required quality tier (fast, balanced, strong)')
+  .option('--explain', 'Explain routing decision')
   .option('-m, --model <model>', 'Specific model to use')
   .option('-t, --temperature <value>', 'Temperature (0-1)', parseFloat)
   .option('-M, --max-tokens <value>', 'Max tokens', parseInt)
@@ -47,6 +49,8 @@ program
     try {
       const ai = getAISwitch();
       const response = await ai.ask(prompt, {
+        tier: options.tier,
+        explain: options.explain,
         provider: options.provider,
         primary: options.primary,
         backup: options.backup,
@@ -77,8 +81,76 @@ program
     providers.forEach(p => {
       const status = p.available ? chalk.green('✓') : chalk.red('✗');
       const prefix = p.isDefault ? ' *' : '  ';
-      console.log(`${prefix} ${status} ${chalk.cyan(p.name)} - ${p.model} ${p.available ? '' : '(unavailable)'}`);
+      
+      const costStr = p.lastCost ? chalk.yellow(`${p.lastCost.toFixed(4)}`) : 'No usage';
+      const healthStr = p.inCooldown ? chalk.red(`Cooling down (${p.cooldownRemaining}s)`) : (p.available ? chalk.green('Healthy') : chalk.red('Unavailable'));
+      console.log(`${prefix} ${chalk.cyan(p.name)} (${p.model}) - ${healthStr} | Last known cost: ${costStr}`);
     });
+    console.log('');
+  });
+
+// Route command
+program
+  .command('route <prompt>')
+  .description('Dry-run the routing engine for a prompt')
+  .option('--tier <tier>', 'Required quality tier')
+  .action((prompt, options) => {
+    const ai = getAISwitch();
+    const best = ai.providers.getBestAvailable(prompt, options.tier);
+    const r = best.rationale;
+    
+    console.log(chalk.bold('\nRouting Decision:'));
+    console.log(`  Selected: ${chalk.green(r.decision)}`);
+    console.log(`  Reason: ${r.reason}\n`);
+    console.log(chalk.bold('Evaluated Providers:'));
+    r.evaluated.forEach(p => {
+       const status = p.eligible ? chalk.green('Eligible') : chalk.red('Ineligible');
+       console.log(`  - ${chalk.cyan(p.provider)} (${p.model})`);
+       console.log(`      Tier: ${p.tier} | Cost Score: ${p.costScore === 999999 ? 'Unknown' : p.costScore}`);
+       console.log(`      Status: ${status} (${p.reason})`);
+    });
+    console.log('');
+  });
+
+// Compare command
+program
+  .command('compare <prompt>')
+  .description('Run prompt across all configured providers and report latency/cost')
+  .action(async (prompt) => {
+    const ai = getAISwitch();
+    const providers = ai.providers.getOrder();
+    
+    console.log(chalk.bold(`\nBenchmarking prompt across ${providers.length} providers...\n`));
+    
+    const results = [];
+    
+    for (const p of providers) {
+      process.stdout.write(`Testing ${p.name}... `);
+      const beforeCost = (ai.costs.getSummary().byProvider.find(st => st.provider === p.name) || {}).cost || 0;
+      const start = Date.now();
+      try {
+        const response = await ai.ask(prompt, { provider: p.name });
+        const latency = Date.now() - start;
+        
+        // Approximate cost
+        let cost = 0;
+        const costsSummary = ai.costs.getSummary();
+        const pStats = costsSummary.byProvider.find(st => st.provider === p.name);
+        if (pStats) {
+           cost = pStats.cost - beforeCost; // This is total cost. Actually we want the cost of THIS request.
+           // To get the cost of this request, we could compute it before and after.
+        }
+        
+        console.log(chalk.green(`${latency}ms`));
+        results.push({ provider: p.name, latency: `${latency}ms`, cost: `${cost.toFixed(6)}`, ttfb: 'N/A', status: 'Success' });
+      } catch (err) {
+        console.log(chalk.red('Failed'));
+        results.push({ provider: p.name, latency: '-', status: err.message });
+      }
+    }
+    
+    console.log(chalk.bold('\nBenchmark Results:'));
+    console.table(results);
     console.log('');
   });
 
