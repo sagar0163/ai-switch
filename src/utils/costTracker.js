@@ -134,16 +134,24 @@ class CostTracker {
     if (!this.enabled) return;
 
     usage = usage || {};
-    const modelKey = `${provider}:${this._modelFor(usage, options.model)}`;
-    const pricing = getPricing(provider, this._modelFor(usage, options.model), this.pricingOverrides);
-    const costs = calculateCost(usage, pricing);
+    const normalized = {
+      model: usage.model,
+      inputTokens: usage.inputTokens || 0,
+      outputTokens: usage.outputTokens || 0,
+      cacheReadTokens: usage.cacheReadTokens || 0,
+      cacheCreationTokens: usage.cacheCreationTokens || 0
+    };
+    const modelFor = this._modelFor(normalized, options.model);
+    const modelKey = `${provider}:${modelFor}`;
+    const pricing = getPricing(provider, modelFor, this.pricingOverrides);
+    const costs = calculateCost(normalized, pricing);
 
     this.data.totalRequests++;
-    this.data.totalTokens.input += usage.inputTokens || 0;
-    this.data.totalTokens.output += usage.outputTokens || 0;
-    this.data.totalTokens.cacheRead += usage.cacheReadTokens || 0;
+    this.data.totalTokens.input += normalized.inputTokens;
+    this.data.totalTokens.output += normalized.outputTokens;
+    this.data.totalTokens.cacheRead += normalized.cacheReadTokens;
 
-    this._recordProvider(provider, modelKey, usage, costs, pricing);
+    this._recordProvider(provider, modelKey, normalized, costs, pricing);
     this._save();
   }
 

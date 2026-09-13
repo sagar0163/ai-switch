@@ -32,7 +32,10 @@
     "cooldownSeconds": 60
   },
   "costTracking": {
-    "enabled": true
+    "enabled": true,
+    "pricing": {
+      "openai:gpt-4o": { "input": 2.5, "output": 10, "cacheRead": 1.25 }
+    }
   },
   "defaultProvider": "openai"
 }
