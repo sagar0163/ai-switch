@@ -97,15 +97,23 @@ program
     }
 
     const summary = ai.getCosts();
-    
+
     console.log(chalk.bold('\nAPI Usage & Costs:\n'));
     console.log(`Total Requests: ${chalk.cyan(summary.totalRequests)}`);
+    console.log(`Cache Hits: ${chalk.cyan(summary.cacheHits)}`);
+    console.log(`Input Tokens: ${chalk.cyan(summary.totalInputTokens)}`);
+    console.log(`Output Tokens: ${chalk.cyan(summary.totalOutputTokens)}`);
+    console.log(`Cached Input Tokens: ${chalk.cyan(summary.totalCacheReadTokens)}`);
     console.log(`Total Cost: ${chalk.yellow(`$${summary.totalCost.toFixed(4)}`)}\n`);
 
     if (summary.byProvider.length > 0) {
       console.log('By Provider:');
       summary.byProvider.forEach(p => {
-        console.log(`  ${chalk.cyan(p.provider)}: $${p.cost.toFixed(4)} (${p.requests} requests)`);
+        const flag = p.unknownPricing ? chalk.yellow(' [unknown pricing]') : '';
+        console.log(`  ${chalk.cyan(p.provider)}: $${p.cost.toFixed(4)} (${p.requests} requests, ${p.inputTokens} in / ${p.outputTokens} out / ${p.cacheReadTokens} cached)${flag}`);
+        if (p.unknownModels.length > 0) {
+          console.log(`      unknown pricing models: ${p.unknownModels.join(', ')} — set costTracking.pricing overrides`);
+        }
       });
     }
     console.log('');

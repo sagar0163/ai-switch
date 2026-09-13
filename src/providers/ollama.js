@@ -8,6 +8,7 @@
 
 const { BaseProvider } = require('./base');
 const { ProviderError } = require('../utils/errors');
+const { parseOllamaUsage } = require('../utils/usage');
 
 class OllamaProvider extends BaseProvider {
   constructor(config) {
@@ -77,7 +78,10 @@ class OllamaProvider extends BaseProvider {
         throw new ProviderError('No response from Ollama', this.name);
       }
 
-      return data.response.trim();
+      return {
+        text: data.response.trim(),
+        usage: parseOllamaUsage(data)
+      };
     } catch (error) {
       if (error instanceof ProviderError) throw error;
       throw new ProviderError(error.message, this.name);

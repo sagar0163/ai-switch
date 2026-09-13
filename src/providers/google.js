@@ -5,6 +5,7 @@
 
 const { BaseProvider } = require('./base');
 const { ProviderError } = require('../utils/errors');
+const { parseGoogleUsage } = require('../utils/usage');
 
 class GoogleProvider extends BaseProvider {
   constructor(config) {
@@ -54,7 +55,10 @@ class GoogleProvider extends BaseProvider {
         throw new ProviderError('Invalid response format from Google AI', this.name);
       }
 
-      return data.candidates[0].content.parts[0].text.trim();
+      return {
+        text: data.candidates[0].content.parts[0].text.trim(),
+        usage: parseGoogleUsage(data, model)
+      };
     } catch (error) {
       if (error instanceof ProviderError) throw error;
       throw new ProviderError(error.message, this.name);

@@ -5,6 +5,7 @@
 
 const { BaseProvider } = require('./base');
 const { ProviderError } = require('../utils/errors');
+const { parseOpenAIUsage } = require('../utils/usage');
 
 class OpenAIProvider extends BaseProvider {
   constructor(config) {
@@ -48,7 +49,10 @@ class OpenAIProvider extends BaseProvider {
         throw new ProviderError('Invalid response format from OpenAI', this.name);
       }
 
-      return data.choices[0].message.content.trim();
+      return {
+        text: data.choices[0].message.content.trim(),
+        usage: parseOpenAIUsage(data)
+      };
     } catch (error) {
       if (error instanceof ProviderError) throw error;
       throw new ProviderError(error.message, this.name);

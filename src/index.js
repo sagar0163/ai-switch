@@ -37,6 +37,7 @@ class AISwitch {
     if (this.cache.isEnabled()) {
       const cached = await this.cache.get(prompt, preferredProvider);
       if (cached) {
+        this.costs.recordCacheHit(preferredProvider || 'cache');
         return cached;
       }
     }
@@ -76,23 +77,27 @@ class AISwitch {
       }
 
       try {
-        const response = await provider.complete(prompt, {
-          model: model || provider.defaultModel,
+        const requestedModel = model || provider.defaultModel;
+        const result = await provider.complete(prompt, {
+          model: requestedModel,
           temperature: temperature ?? 0.7,
           maxTokens: maxTokens || 2048
         });
 
         this.providers.recordSuccess(provider.name);
 
+        const text = typeof result === 'string' ? result : result?.text ?? '';
+        const usage = typeof result === 'object' && result ? result.usage : null;
+
         // Cache the response
         if (this.cache.isEnabled()) {
-          await this.cache.set(prompt, response, preferredProvider || provider.name);
+          await this.cache.set(prompt, text, preferredProvider || provider.name);
         }
 
-        // Track cost
-        this.costs.record(provider.name, response);
+        // Track cost from real provider usage
+        this.costs.record(provider.name, usage, { model: requestedModel });
 
-        return response;
+        return text;
       } catch (error) {
         lastError = error;
         const retryAfter = typeof error.retryAfter === 'number' && error.retryAfter > 0

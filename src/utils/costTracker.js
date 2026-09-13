@@ -1,29 +1,38 @@
 /**
  * Cost Tracker
- * Tracks API usage and estimated costs per provider
+ * Records provider-billed token usage and prices it with the actual model's
+ * current rate (models.dev table + config overrides). Unknown models are
+ * flagged, never silently priced.
  */
 
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-// Pricing per 1K tokens (approximate)
-const PRICING = {
-  'openai:gpt-4': { input: 0.03, output: 0.06 },
-  'openai:gpt-3.5-turbo': { input: 0.0005, output: 0.0015 },
-  'anthropic:claude-3-opus': { input: 0.015, output: 0.075 },
-  'anthropic:claude-3-sonnet': { input: 0.003, output: 0.015 },
-  'anthropic:claude-3-haiku': { input: 0.00025, output: 0.00125 },
-  'google:gemini-pro': { input: 0.001, output: 0.002 },
-  'ollama:local': { input: 0, output: 0 } // Free for local models
-};
+const { getPricing, calculateCost } = require('./pricing');
+
+function emptyProvider() {
+  return {
+    requests: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    inputCost: 0,
+    outputCost: 0,
+    cacheReadCost: 0,
+    cost: 0,
+    unknownPricing: false,
+    unknownModels: []
+  };
+}
 
 class CostTracker {
   constructor(options = {}) {
     this.enabled = options.enabled !== false;
-    this.storagePath = options.storagePath || 
+    this.storagePath = options.storagePath ||
       path.join(os.homedir(), '.ai-switch', 'costs.json');
-    
+    this.pricingOverrides = options.pricing || {};
+
     this.data = this._load();
   }
 
@@ -31,17 +40,38 @@ class CostTracker {
     try {
       if (fs.existsSync(this.storagePath)) {
         const raw = fs.readFileSync(this.storagePath, 'utf8');
-        return JSON.parse(raw);
+        return this._normalize(JSON.parse(raw));
       }
     } catch (error) {
       // Ignore load errors
     }
-    
+
+    return this._fresh();
+  }
+
+  _fresh() {
     return {
       totalRequests: 0,
-      totalTokens: { input: 0, output: 0 },
-      byProvider: {}
+      cacheHits: 0,
+      totalTokens: { input: 0, output: 0, cacheRead: 0 },
+      byProvider: {},
+      byModel: {}
     };
+  }
+
+  _normalize(data) {
+    const base = this._fresh();
+    if (!data || typeof data !== 'object') return base;
+    base.totalRequests = data.totalRequests || 0;
+    base.cacheHits = data.cacheHits || 0;
+    base.totalTokens = {
+      input: data.totalTokens?.input || 0,
+      output: data.totalTokens?.output || 0,
+      cacheRead: data.totalTokens?.cacheRead || 0
+    };
+    base.byProvider = data.byProvider || {};
+    base.byModel = data.byModel || {};
+    return base;
   }
 
   _save() {
@@ -52,63 +82,90 @@ class CostTracker {
     fs.writeFileSync(this.storagePath, JSON.stringify(this.data, null, 2), 'utf8');
   }
 
-  /**
-   * Estimate token count (rough approximation)
-   */
-  _estimateTokens(text) {
-    // Rough estimate: ~4 characters per token for English
-    return Math.ceil(text.length / 4);
+  _modelFor(usage, fallback) {
+    return usage.model || fallback || 'unknown';
   }
 
-  /**
-   * Get pricing for a provider/model combination
-   */
-  _getPricing(provider, model) {
-    const key = `${provider}:${model}`;
-    return PRICING[key] || { input: 0.01, output: 0.03 }; // Default fallback
-  }
-
-  /**
-   * Calculate cost from token counts
-   */
-  _calculateCost(provider, model, inputTokens, outputTokens) {
-    const pricing = this._getPricing(provider, model);
-    const inputCost = (inputTokens / 1000) * pricing.input;
-    const outputCost = (outputTokens / 1000) * pricing.output;
-    return inputCost + outputCost;
-  }
-
-  /**
-   * Record an API call
-   */
-  record(provider, response, options = {}) {
-    if (!this.enabled) return;
-
-    const model = options.model || 'unknown';
-    const prompt = options.prompt || '';
-    
-    const inputTokens = this._estimateTokens(prompt);
-    const outputTokens = this._estimateTokens(response);
-    const cost = this._calculateCost(provider, model, inputTokens, outputTokens);
-
-    this.data.totalRequests++;
-    this.data.totalTokens.input += inputTokens;
-    this.data.totalTokens.output += outputTokens;
-
+  _recordProvider(provider, modelKey, usage, costs, pricing) {
     if (!this.data.byProvider[provider]) {
-      this.data.byProvider[provider] = {
-        requests: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-        cost: 0
-      };
+      this.data.byProvider[provider] = emptyProvider();
+    }
+    const p = this.data.byProvider[provider];
+    p.requests += 1;
+    p.inputTokens += usage.inputTokens;
+    p.outputTokens += usage.outputTokens;
+    p.cacheReadTokens += usage.cacheReadTokens;
+    p.inputCost += costs.inputCost;
+    p.outputCost += costs.outputCost;
+    p.cacheReadCost += costs.cacheReadCost;
+    p.cost += costs.cost;
+    if (pricing && !pricing.known) {
+      p.unknownPricing = true;
+      if (!p.unknownModels.includes(modelKey)) {
+        p.unknownModels.push(modelKey);
+      }
     }
 
-    this.data.byProvider[provider].requests++;
-    this.data.byProvider[provider].inputTokens += inputTokens;
-    this.data.byProvider[provider].outputTokens += outputTokens;
-    this.data.byProvider[provider].cost += cost;
+    if (!this.data.byModel[modelKey]) {
+      this.data.byModel[modelKey] = { provider, model: usage.model, ...emptyProvider() };
+    }
+    const m = this.data.byModel[modelKey];
+    m.requests += 1;
+    m.inputTokens += usage.inputTokens;
+    m.outputTokens += usage.outputTokens;
+    m.cacheReadTokens += usage.cacheReadTokens;
+    m.inputCost += costs.inputCost;
+    m.outputCost += costs.outputCost;
+    m.cacheReadCost += costs.cacheReadCost;
+    m.cost += costs.cost;
+    if (pricing && !pricing.known) {
+      m.unknownPricing = true;
+    }
+  }
 
+  /**
+   * Record a real API call.
+   * @param {string} provider - Provider name
+   * @param {Object} usage - Canonical usage record ({ inputTokens, outputTokens,
+   *   cacheReadTokens, cacheCreationTokens, model })
+   * @param {Object} [options] - Options ({ model: fallback model id })
+   */
+  record(provider, usage, options = {}) {
+    if (!this.enabled) return;
+
+    usage = usage || {};
+    const normalized = {
+      model: usage.model,
+      inputTokens: usage.inputTokens || 0,
+      outputTokens: usage.outputTokens || 0,
+      cacheReadTokens: usage.cacheReadTokens || 0,
+      cacheCreationTokens: usage.cacheCreationTokens || 0
+    };
+    const modelFor = this._modelFor(normalized, options.model);
+    const modelKey = `${provider}:${modelFor}`;
+    const pricing = getPricing(provider, modelFor, this.pricingOverrides);
+    const costs = calculateCost(normalized, pricing);
+
+    this.data.totalRequests++;
+    this.data.totalTokens.input += normalized.inputTokens;
+    this.data.totalTokens.output += normalized.outputTokens;
+    this.data.totalTokens.cacheRead += normalized.cacheReadTokens;
+
+    this._recordProvider(provider, modelKey, normalized, costs, pricing);
+    this._save();
+  }
+
+  /**
+   * Record a cache hit. The underlying API call was already charged once, so
+   * this adds no tokens and no cost.
+   * @param {string} provider - Provider whose cached response was served
+   */
+  recordCacheHit(provider) {
+    if (!this.enabled) return;
+    this.data.cacheHits++;
+    if (provider && !this.data.byProvider[provider]) {
+      this.data.byProvider[provider] = emptyProvider();
+    }
     this._save();
   }
 
@@ -120,21 +177,30 @@ class CostTracker {
       .reduce((sum, p) => sum + p.cost, 0);
 
     const byProvider = Object.entries(this.data.byProvider)
-      .map(([provider, data]) => ({
+      .map(([provider, d]) => ({
         provider,
-        requests: data.requests,
-        inputTokens: data.inputTokens,
-        outputTokens: data.outputTokens,
-        cost: data.cost
+        requests: d.requests,
+        inputTokens: d.inputTokens,
+        outputTokens: d.outputTokens,
+        cacheReadTokens: d.cacheReadTokens,
+        inputCost: d.inputCost,
+        outputCost: d.outputCost,
+        cacheReadCost: d.cacheReadCost,
+        cost: d.cost,
+        unknownPricing: d.unknownPricing,
+        unknownModels: d.unknownModels
       }))
       .sort((a, b) => b.cost - a.cost);
 
     return {
       totalRequests: this.data.totalRequests,
+      cacheHits: this.data.cacheHits,
       totalInputTokens: this.data.totalTokens.input,
       totalOutputTokens: this.data.totalTokens.output,
+      totalCacheReadTokens: this.data.totalTokens.cacheRead,
       totalCost,
-      byProvider
+      byProvider,
+      byModel: this.data.byModel
     };
   }
 
@@ -142,11 +208,7 @@ class CostTracker {
    * Reset all tracking data
    */
   reset() {
-    this.data = {
-      totalRequests: 0,
-      totalTokens: { input: 0, output: 0 },
-      byProvider: {}
-    };
+    this.data = this._fresh();
     this._save();
   }
 }

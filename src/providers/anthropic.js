@@ -5,6 +5,7 @@
 
 const { BaseProvider } = require('./base');
 const { ProviderError } = require('../utils/errors');
+const { parseAnthropicUsage } = require('../utils/usage');
 
 class AnthropicProvider extends BaseProvider {
   constructor(config) {
@@ -50,7 +51,10 @@ class AnthropicProvider extends BaseProvider {
         throw new ProviderError('Invalid response format from Anthropic', this.name);
       }
 
-      return data.content[0].text.trim();
+      return {
+        text: data.content[0].text.trim(),
+        usage: parseAnthropicUsage(data)
+      };
     } catch (error) {
       if (error instanceof ProviderError) throw error;
       throw new ProviderError(error.message, this.name);
