@@ -11,7 +11,7 @@ cache short-circuit on hits, and stream-error handling that avoids partial garba
 - [x] Ollama provider: `streamComplete` (stream:true, NDJSON `response`/`message.content` deltas)
 - [x] AISwitch.ask() plumbing: stream/onToken/json options, cache-hit short-circuit, partial-error no-failover
 - [x] CLI: `ask` prints tokens as they arrive; add `--no-stream` and `--json`; `chat` streams into reply line
-- [ ] Unit tests: stream utils, per-provider SSE/NDJSON parsing, ask() streaming == non-streaming, cache short-circuit
+- [x] Unit tests: stream utils, per-provider SSE/NDJSON parsing, ask() streaming == non-streaming, cache short-circuit
 - [ ] Update README + CHANGELOG for streaming flags/behavior
-- [ ] Run lint + full test suite; fix failures
+- [x] Run lint + full test suite; fix failures
 - [ ] Remove plan file, final commit, push branch

@@ -5,6 +5,7 @@ A CLI tool that provides a unified interface for multiple AI LLM providers with 
 ## Features
 
 - **Multi-Provider Support**: OpenAI, Anthropic, Google AI, Ollama (local)
+- **Streaming Responses**: tokens print as they arrive in `ask` and `chat` modes
 - **Automatic Failover**: Falls back to backup provider on failure
 - **Cost Tracking**: Tracks API usage and costs per provider
 - **Response Caching**: Avoids redundant API calls
@@ -107,8 +108,14 @@ cost.
 ## Usage
 
 ```bash
-# Ask a question (auto-selects best available provider)
+# Ask a question — tokens stream to the terminal as they arrive (auto-selects best provider)
 ai-switch ask "What is quantum computing?"
+
+# Disable streaming (buffered response, printed once complete)
+ai-switch ask --no-stream "What is quantum computing?"
+
+# Raw JSON output for scripting (implies non-streaming)
+ai-switch ask --json "What is quantum computing?"
 
 # Use specific provider
 ai-switch ask --provider openai "Explain neural networks"
@@ -125,9 +132,24 @@ ai-switch cache clear
 # List configured providers
 ai-switch providers
 
-# Start a multi-turn chat session (full history is sent each turn)
+# Start a multi-turn chat session (full history is sent each turn; replies stream in place)
 ai-switch chat
 ```
+
+### Streaming
+
+`ask` and `chat` stream tokens as they arrive by default. Each provider's
+streaming transport is supported: OpenAI SSE (`stream: true`), Anthropic content
+block deltas, Gemini `streamGenerateContent?alt=sse`, and Ollama `stream: true`
+NDJSON. Pass `--no-stream` to either command to fall back to the buffered path,
+and `-j/--json` on `ask` for a single JSON object (`text`, `provider`, `model`,
+`usage`) suitable for scripting.
+
+Streaming composes with caching: a cache hit short-circuits and returns the full
+stored response without streaming (there is nothing incremental to show). If a
+stream fails mid-token, the partial output is preserved but no failover happens,
+so another provider's text is never spliced onto a half-finished reply. Failover
+still works normally when a provider fails before emitting any token.
 
 ## License
 

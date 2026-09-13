@@ -292,6 +292,20 @@ describe('AISwitch streaming', () => {
     expect(ai.providers.providers.openai.streamComplete).not.toHaveBeenCalled();
   });
 
+  it('cache hit short-circuits even without an explicit provider (shared bucket)', async () => {
+    const ai = buildAI({ cache: { enabled: true } });
+    const cached = 'shared bucket answer';
+    await ai.cache.set('hi', cached, 'any');
+
+    ai.providers.providers.openai.streamComplete = jest.fn();
+    const tokens = [];
+    const result = await ai.ask('hi', { stream: true, onToken: (token) => tokens.push(token) });
+
+    expect(result).toBe(cached);
+    expect(tokens).toEqual([]);
+    expect(ai.providers.providers.openai.streamComplete).not.toHaveBeenCalled();
+  });
+
   it('does not fail over when the stream dies after partial output', async () => {
     const ai = buildAI({ failover: { enabled: true, maxFailures: 1, cooldownSeconds: 60 } });
     const partialErr = new ProviderError('connection reset', 'openai', 500);

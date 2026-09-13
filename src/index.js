@@ -57,13 +57,16 @@ class AISwitch {
       maxContextTokens: options.maxContextTokens ?? this.chatConfig.maxContextTokens
     });
 
-    // Cache key covers the full context (flat prompt or serialized history)
+    // Cache key covers the full context (flat prompt or serialized history).
+    // Namespace the cache per explicit provider, or use a shared bucket when none
+    // is given, so the get/set keys always agree and a cache hit can short-circuit.
+    const cacheProvider = preferredProvider || 'any';
     const cacheKey = typeof request === 'string' ? request : JSON.stringify(trimmed);
 
     // Streaming composes with caching: a cache hit short-circuits without streaming,
     // since the full response is already known.
     if (this.cache.isEnabled()) {
-      const cached = await this.cache.get(cacheKey, preferredProvider);
+      const cached = await this.cache.get(cacheKey, cacheProvider);
       if (cached) {
         this.costs.recordCacheHit(preferredProvider || 'cache');
         return json ? { text: cached, provider: preferredProvider || 'cache', usage: null } : cached;
@@ -123,7 +126,7 @@ class AISwitch {
 
         // Cache the response
         if (this.cache.isEnabled()) {
-          await this.cache.set(cacheKey, text, preferredProvider || provider.name);
+          await this.cache.set(cacheKey, text, cacheProvider);
         }
 
         // Track cost from real provider usage
