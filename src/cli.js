@@ -141,9 +141,11 @@ program
 program
   .command('chat')
   .description('Start an interactive chat session')
-  .action(() => {
+  .option('-p, --provider <name>', 'Specific provider to use (openai, anthropic, etc.)')
+  .option('-m, --model <model>', 'Specific model to use')
+  .action((options) => {
     console.log(chalk.bold('\nAI Chat Mode (type "exit" to quit)\n'));
-    
+
     const readline = require('readline');
     const rl = readline.createInterface({
       input: process.stdin,
@@ -151,7 +153,7 @@ program
     });
 
     const ai = getAISwitch();
-    const chatHistory = [];
+    const session = ai.createChatSession();
 
     const askQuestion = () => {
       rl.question(chalk.cyan('You: '), async (prompt) => {
@@ -160,12 +162,18 @@ program
           return;
         }
 
-        chatHistory.push({ role: 'user', content: prompt });
-        
+        session.addUser(prompt);
+
         const spinner = ora('Thinking...').start();
+        const { messages, turns, tokens } = session.nextRequest();
+        console.log(chalk.dim(`  ↪ sending ${turns} turn${turns === 1 ? '' : 's'} (~${tokens.toLocaleString()} tokens)`));
+
         try {
-          const response = await ai.ask(prompt);
-          chatHistory.push({ role: 'assistant', content: response });
+          const response = await ai.ask(messages, {
+            provider: options.provider,
+            model: options.model
+          });
+          session.addAssistant(response);
           spinner.stop();
           console.log(chalk.green('AI: ') + response + '\n');
         } catch (error) {

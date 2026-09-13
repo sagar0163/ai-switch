@@ -18,7 +18,12 @@ class GoogleProvider extends BaseProvider {
   async complete(prompt, options = {}) {
     const model = options.model || this.defaultModel;
     const apiKey = this.config.apiKey;
-    
+    const messages = options.messages || [{ role: 'user', content: prompt }];
+    const contents = messages.map((m) => ({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: m.content }]
+    }));
+
     try {
       const response = await fetch(
         `${this.baseUrl}/models/${model}:generateContent?key=${apiKey}`,
@@ -28,9 +33,7 @@ class GoogleProvider extends BaseProvider {
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
-            contents: [{
-              parts: [{ text: prompt }]
-            }],
+            contents,
             generationConfig: {
               temperature: options.temperature ?? 0.7,
               maxOutputTokens: options.maxTokens || 2048
