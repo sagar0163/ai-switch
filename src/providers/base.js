@@ -17,7 +17,7 @@ class BaseProvider {
    * @param {Object} options - Request options
    * @returns {Promise<string>} The response text
    */
-  async complete(prompt, options = {}) {
+  async complete() {
     throw new Error('complete() must be implemented by subclass');
   }
 

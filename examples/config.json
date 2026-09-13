@@ -25,7 +25,12 @@
     "ttl": 3600,
     "maxSize": 1000
   },
-  "failover": true,
+  "failover": {
+    "enabled": true,
+    "order": ["openai", "anthropic", "google"],
+    "maxFailures": 3,
+    "cooldownSeconds": 60
+  },
   "costTracking": {
     "enabled": true
   },

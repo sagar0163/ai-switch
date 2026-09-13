@@ -36,9 +36,22 @@ Create `~/.ai-switch/config.json`:
     "enabled": true,
     "ttl": 3600
   },
-  "failover": true
+  "failover": {
+    "enabled": true,
+    "order": ["openai", "anthropic"],
+    "maxFailures": 3,
+    "cooldownSeconds": 60
+  }
 }
 ```
+
+`failover` accepts `true`/`false`, or an object with:
+- `order` — the default failover chain (providers are tried in this order)
+- `maxFailures` — consecutive failures before a provider is put on cooldown (default: 3)
+- `cooldownSeconds` — how long a provider is skipped after tripping the breaker (default: 60)
+
+A provider that replies with a `Retry-After` header is backed off for that window immediately.
+The `--primary`/`--backup` flags override the configured order for a single call.
 
 ## Usage
 
