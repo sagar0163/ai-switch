@@ -33,6 +33,11 @@ class AISwitch {
    * Send a query to an AI provider, failing over in explicit order.
    * Accepts a flat prompt string (single-shot) or a full messages array
    * (system/user/assistant) for multi-turn chat.
+   *
+   * When `options.stream` is true (and the provider supports it) the response
+   * is consumed incrementally: each text delta is passed to `options.onToken`,
+   * and `options.onResult` receives `{ provider, model, text, usage, stream, cache }`
+   * once the request completes (or short-circuits on a cache hit).
    * @param {string|Array} request - Prompt string or messages array
    * @param {Object} options - Provider and request options
    * @returns {Promise<string>} The AI response
