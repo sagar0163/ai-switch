@@ -71,6 +71,15 @@ class AnthropicProvider extends BaseProvider {
    * @returns {Promise<{text: string, usage: Object}>} Aggregated response
    */
   async streamComplete(prompt, options = {}, onToken) {
+    try {
+      return await this._streamComplete(prompt, options, onToken);
+    } catch (error) {
+      if (error instanceof ProviderError) throw error;
+      throw new ProviderError(error.message, this.name);
+    }
+  }
+
+  async _streamComplete(prompt, options = {}, onToken) {
     const model = options.model || this.defaultModel;
     const messages = options.messages || [{ role: 'user', content: prompt }];
     const controller = new StreamController({ provider: this.name, onToken });

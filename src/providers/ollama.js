@@ -36,14 +36,17 @@ class OllamaProvider extends BaseProvider {
 
   /**
    * Build the request endpoint + body for a generate/chat call.
+   * isChat is decided from whether the caller passed a messages array, so a bare
+   * prompt stays on /api/generate.
    * @param {string} model - Model id
-   * @param {Object} options - Request options
+   * @param {Object} options - Request options ({ prompt, messages?, temperature?, maxTokens? })
    * @param {boolean} stream - Whether to stream
    * @returns {{endpoint: string, body: Object}}
    */
-  _requestBody(model, options, stream) {
-    const messages = options.messages || [{ role: 'user', content: options.prompt ?? '' }];
-    const isChat = Array.isArray(options.messages) && options.messages.length > 0;
+  _requestBody(model, options = {}, stream) {
+    const { prompt = '', messages } = options;
+    const isChat = Array.isArray(messages) && messages.length > 0;
+    const payloadMessages = isChat ? messages : [{ role: 'user', content: prompt }];
     const shared = {
       model,
       stream,
@@ -53,19 +56,18 @@ class OllamaProvider extends BaseProvider {
       }
     };
 
-    // Full history goes through the chat endpoint; a single prompt stays on /api/generate
     const endpoint = isChat ? `${this.baseUrl}/api/chat` : `${this.baseUrl}/api/generate`;
     const body = isChat
-      ? { ...shared, messages }
-      : { ...shared, prompt: options.prompt };
+      ? { ...shared, messages: payloadMessages }
+      : { ...shared, prompt };
 
     return { endpoint, body };
   }
 
   async complete(prompt, options = {}) {
     const model = options.model || this.defaultModel;
-    const messages = options.messages || [{ role: 'user', content: prompt }];
-    const { endpoint, body } = this._requestBody(model, { ...options, prompt, messages }, false);
+    const isChat = Array.isArray(options.messages) && options.messages.length > 0;
+    const { endpoint, body } = this._requestBody(model, { ...options, prompt }, false);
 
     try {
       // Check availability first
@@ -96,9 +98,7 @@ class OllamaProvider extends BaseProvider {
       }
 
       const data = await response.json();
-      const text = Array.isArray(options.messages) && options.messages.length > 0
-        ? data.message?.content
-        : data.response;
+      const text = isChat ? data.message?.content : data.response;
 
       if (!text) {
         throw new ProviderError('No response from Ollama', this.name);
@@ -124,11 +124,19 @@ class OllamaProvider extends BaseProvider {
    * @returns {Promise<{text: string, usage: Object}>} Aggregated response
    */
   async streamComplete(prompt, options = {}, onToken) {
+    try {
+      return await this._streamComplete(prompt, options, onToken);
+    } catch (error) {
+      if (error instanceof ProviderError) throw error;
+      throw new ProviderError(error.message, this.name);
+    }
+  }
+
+  async _streamComplete(prompt, options = {}, onToken) {
     const model = options.model || this.defaultModel;
-    const messages = options.messages || [{ role: 'user', content: prompt }];
     const isChat = Array.isArray(options.messages) && options.messages.length > 0;
     const controller = new StreamController({ provider: this.name, onToken });
-    const { endpoint, body } = this._requestBody(model, { ...options, prompt, messages }, true);
+    const { endpoint, body } = this._requestBody(model, { ...options, prompt }, true);
 
     const available = await this.isAvailable();
     if (!available) {
@@ -158,6 +166,8 @@ class OllamaProvider extends BaseProvider {
 
     let done = null;
     await forEachLine(response, (line) => {
+      if (!line) return;
+
       let chunk;
       try {
         chunk = JSON.parse(line);

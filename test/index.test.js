@@ -228,6 +228,140 @@ describe('AISwitch conversation history (messages path)', () => {
   });
 });
 
+describe('AISwitch streaming', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('concatenated stream events equal the non-streaming output for the same request', async () => {
+    const ai = buildAI();
+    const full = 'bonjour le monde';
+
+    ai.providers.providers.openai.complete.mockResolvedValue(full);
+    const buffered = await ai.ask('hi', { provider: 'openai' });
+    expect(buffered).toBe(full);
+
+    const fragments = ['bonjour ', 'le ', 'monde'];
+    ai.providers.providers.openai.complete.mockClear();
+    ai.providers.providers.openai.streamComplete = jest.fn(async (prompt, opts, onToken) => {
+      let text = '';
+      for (const fragment of fragments) {
+        text += fragment;
+        if (onToken) onToken(fragment);
+      }
+      return { text, usage: { inputTokens: 5, outputTokens: 3, model: 'gpt-4' } };
+    });
+
+    const tokens = [];
+    const streamed = await ai.ask('hi', {
+      provider: 'openai',
+      stream: true,
+      onToken: (token) => tokens.push(token)
+    });
+
+    expect(tokens.join('')).toBe(full);
+    expect(ai.providers.providers.openai.complete).not.toHaveBeenCalled();
+    expect(streamed).toBe(full);
+  });
+
+  it('uses the buffered complete() path when stream is false', async () => {
+    const ai = buildAI();
+    ai.providers.providers.openai.complete.mockResolvedValue('buffered');
+    ai.providers.providers.openai.streamComplete = jest.fn();
+
+    const result = await ai.ask('hi', { provider: 'openai', stream: false });
+    expect(result).toBe('buffered');
+    expect(ai.providers.providers.openai.streamComplete).not.toHaveBeenCalled();
+  });
+
+  it('short-circuits on a cache hit without any streaming', async () => {
+    const ai = buildAI({ cache: { enabled: true } });
+    const cached = 'cached response';
+    await ai.cache.set('hi', cached, 'openai');
+
+    ai.providers.providers.openai.streamComplete = jest.fn();
+    const tokens = [];
+    const result = await ai.ask('hi', {
+      provider: 'openai',
+      stream: true,
+      onToken: (token) => tokens.push(token)
+    });
+
+    expect(result).toBe(cached);
+    expect(tokens).toEqual([]);
+    expect(ai.providers.providers.openai.streamComplete).not.toHaveBeenCalled();
+  });
+
+  it('does not fail over when the stream dies after partial output', async () => {
+    const ai = buildAI({ failover: { enabled: true, maxFailures: 1, cooldownSeconds: 60 } });
+    const partialErr = new ProviderError('connection reset', 'openai', 500);
+    partialErr.partial = true;
+    ai.providers.providers.openai.streamComplete = jest.fn(async (prompt, opts, onToken) => {
+      if (onToken) onToken('partial ');
+      throw partialErr;
+    });
+    ai.providers.providers.anthropic.streamComplete = jest.fn().mockResolvedValue('anthropic ok');
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await expect(ai.ask('hi', { primary: 'openai', backup: 'anthropic', stream: true }))
+      .rejects.toThrow(/mid-stream/);
+    expect(ai.providers.providers.anthropic.streamComplete).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+    expect(ai.providers.isInCooldown('openai')).toBe(true);
+  });
+
+  it('fails over normally when the stream dies before any token', async () => {
+    const ai = buildAI();
+    ai.providers.providers.openai.streamComplete = jest.fn()
+      .mockRejectedValue(new ProviderError('down', 'openai', 500));
+    ai.providers.providers.anthropic.streamComplete = jest.fn().mockResolvedValue('anthropic ok');
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const tokens = [];
+    const result = await ai.ask('hi', {
+      primary: 'openai',
+      backup: 'anthropic',
+      stream: true,
+      onToken: (token) => tokens.push(token)
+    });
+
+    expect(result).toBe('anthropic ok');
+    expect(tokens).toEqual([]);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns metadata in json mode without streaming', async () => {
+    const ai = buildAI();
+    ai.providers.providers.openai.complete.mockResolvedValue('plain text');
+    ai.providers.providers.openai.streamComplete = jest.fn();
+
+    const result = await ai.ask('hi', { provider: 'openai', json: true });
+    expect(result).toEqual({
+      text: 'plain text',
+      provider: 'openai',
+      model: 'gpt-4',
+      usage: null
+    });
+    expect(ai.providers.providers.openai.streamComplete).not.toHaveBeenCalled();
+  });
+
+  it('keeps json mode working on a cache hit with no API call', async () => {
+    const ai = buildAI({ cache: { enabled: true } });
+    await ai.cache.set('hi', 'cached', 'openai');
+    ai.providers.providers.openai.complete = jest.fn();
+
+    const result = await ai.ask('hi', { provider: 'openai', json: true });
+    expect(result.text).toBe('cached');
+    expect(result.provider).toBe('openai');
+    expect(ai.providers.providers.openai.complete).not.toHaveBeenCalled();
+  });
+});
+
+function bufferReceivedMock(ai) {
+  // helper placeholder to keep assertions explicit; not used
+  return undefined;
+}
+
 describe('AISwitch Retry-After handling', () => {
   afterEach(() => {
     jest.restoreAllMocks();

@@ -10,10 +10,11 @@
 const { ProviderError } = require('./errors');
 
 /**
- * Iterate the trimmed lines of a streaming HTTP response body.
+ * Iterate the (trimmed) lines of a streaming HTTP response body, including blank
+ * lines, so SSE callers can use empty lines as event flush boundaries.
  * Falls back to a single JSON line when the body is not a stream.
  * @param {Response} response - fetch() Response
- * @param {(line: string) => void} onLine - Called per trimmed non-empty line
+ * @param {(line: string) => void} onLine - Called per trimmed line
  */
 async function forEachLine(response, onLine) {
   if (!response.body) {
@@ -32,10 +33,10 @@ async function forEachLine(response, onLine) {
     while ((idx = buffer.indexOf('\n')) !== -1) {
       const line = buffer.slice(0, idx).trim();
       buffer = buffer.slice(idx + 1);
-      if (line) onLine(line);
+      onLine(line);
     }
   }
-  if (buffer.trim()) onLine(buffer.trim());
+  onLine(buffer.trim());
 }
 
 /**
@@ -65,6 +66,9 @@ async function forEachSSEEvent(response, onEvent) {
     } else if (line === '') {
       flush();
       event = 'message';
+    } else {
+      // Continuation of the previous data field (SSE field continuation).
+      data.push(line);
     }
   });
   flush();
