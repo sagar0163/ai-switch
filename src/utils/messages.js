@@ -67,7 +67,7 @@ function describeHistory(messages) {
 
 /**
  * Drop whole user->assistant turns from the front until `maxTurns` user turns
- * remain. Leading system messages are preserved.
+ * remain. Leading system messages are preserved and reattached.
  * @param {Array} messages - Messages array
  * @param {number} maxTurns - Maximum user turns to keep
  * @returns {Array} Copy with at most maxTurns turns
@@ -85,15 +85,21 @@ function trimToMaxTurns(messages, maxTurns) {
       seen += 1;
       if (seen === excess + 1) {
         startIndex = i;
-        while (startIndex > 0 && messages[startIndex - 1].role === 'system') {
-          startIndex -= 1;
-        }
         break;
       }
     }
   }
 
-  return messages.slice(startIndex);
+  // Re-attach any contiguous leading system messages.
+  const leadingSystem = [];
+  for (const m of messages) {
+    if (m.role === 'system') leadingSystem.push(m);
+    else break;
+  }
+
+  return startIndex < leadingSystem.length
+    ? messages.slice(startIndex)
+    : [...leadingSystem, ...messages.slice(startIndex)];
 }
 
 /**
@@ -124,7 +130,7 @@ function trimToMaxTokens(messages, maxContextTokens) {
 function trimMessages(messages, options = {}) {
   if (!Array.isArray(messages) || messages.length === 0) return [];
 
-  let trimmed = messages;
+  let trimmed = messages.slice();
   if (typeof options.maxTurns === 'number' && options.maxTurns > 0) {
     trimmed = trimToMaxTurns(trimmed, options.maxTurns);
   }

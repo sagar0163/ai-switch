@@ -159,6 +159,75 @@ describe('AISwitch cooldown', () => {
   });
 });
 
+describe('AISwitch conversation history (messages path)', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('sends the full conversation history to the provider', async () => {
+    const ai = buildAI();
+    ai.providers.providers.openai.complete.mockResolvedValue('your name is Sam');
+
+    const history = [
+      { role: 'user', content: 'my name is Sam' },
+      { role: 'assistant', content: 'nice to meet you Sam' },
+      { role: 'user', content: 'what is my name?' }
+    ];
+
+    const result = await ai.ask(history, { provider: 'openai' });
+
+    expect(result).toBe('your name is Sam');
+    expect(ai.providers.providers.openai.complete).toHaveBeenCalledTimes(1);
+    expect(ai.providers.providers.openai.complete.mock.calls[0][1].messages).toEqual(history);
+  });
+
+  it('keeps single-shot ask() payload behavior unchanged', async () => {
+    const ai = buildAI();
+    ai.providers.providers.openai.complete.mockResolvedValue('hi there');
+
+    await ai.ask('hi', { provider: 'openai' });
+
+    expect(ai.providers.providers.openai.complete).toHaveBeenCalledTimes(1);
+    const [prompt, options] = ai.providers.providers.openai.complete.mock.calls[0];
+    expect(prompt).toBe('hi');
+    expect(options.messages).toEqual([{ role: 'user', content: 'hi' }]);
+  });
+
+  it('trims the history to the configured chat.maxTurns before sending', async () => {
+    const ai = buildAI({ chat: { maxTurns: 1 } });
+    ai.providers.providers.openai.complete.mockResolvedValue('ok');
+
+    const history = [
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: 'one' },
+      { role: 'user', content: 'second' },
+      { role: 'assistant', content: 'two' },
+      { role: 'user', content: 'third' }
+    ];
+
+    await ai.ask(history, { provider: 'openai' });
+
+    const sent = ai.providers.providers.openai.complete.mock.calls[0][1].messages;
+    expect(sent).toEqual([{ role: 'user', content: 'third' }]);
+  });
+
+  it('createChatSession wires the configured chat caps', () => {
+    const ai = buildAI({ chat: { maxTurns: 2 } });
+    const session = ai.createChatSession();
+    for (let i = 1; i <= 4; i++) {
+      session.addUser(`q${i}`).addAssistant(`a${i}`);
+    }
+    const req = session.nextRequest();
+    expect(req.turns).toBe(2);
+    expect(req.messages).toEqual([
+      { role: 'user', content: 'q3' },
+      { role: 'assistant', content: 'a3' },
+      { role: 'user', content: 'q4' },
+      { role: 'assistant', content: 'a4' }
+    ]);
+  });
+});
+
 describe('AISwitch Retry-After handling', () => {
   afterEach(() => {
     jest.restoreAllMocks();
