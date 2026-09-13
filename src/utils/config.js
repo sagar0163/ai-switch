@@ -26,8 +26,9 @@ class ConfigManager {
   }
 
   _load() {
+    this.hasConfigFile = fs.existsSync(this.configPath);
     try {
-      if (fs.existsSync(this.configPath)) {
+      if (this.hasConfigFile) {
         const data = fs.readFileSync(this.configPath, 'utf8');
         return JSON.parse(data);
       }
@@ -43,12 +44,10 @@ class ConfigManager {
     return {
       providers: {
         openai: {
-          apiKey: process.env.OPENAI_API_KEY || '',
           model: 'gpt-4',
           baseUrl: 'https://api.openai.com/v1'
         },
         anthropic: {
-          apiKey: process.env.ANTHROPIC_API_KEY || '',
           model: 'claude-3-opus-20240229',
           baseUrl: 'https://api.anthropic.com/v1'
         }

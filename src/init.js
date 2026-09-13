@@ -108,26 +108,31 @@ function suggestChain(okNames, configuredNames = okNames) {
 
 /**
  * Merge the wizard's selections into a complete config object.
- * Preserves existing provider settings (model/baseUrl) and reconfigures
- * failover/cache/chat/costTracking with sane defaults.
+ * Only providers explicitly confirmed by the user end up in the file; a
+ * previously stored keyed provider that the wizard didn't touch is preserved
+ * (re-runs don't wipe working providers). Empty key placeholders are dropped.
  * @param {Object} current - Existing config (or {})
  * @param {Object} options - { providers: [{name,key,baseUrl,model}], defaultProvider, chain }
  * @returns {Object} New config object
  */
 function buildInitConfig(current = {}, options = {}) {
   const providersIn = options.providers || [];
-  const providers = { ...(current.providers || {}) };
+  const prevProviders = current.providers || {};
+  const providers = {};
 
   for (const p of providersIn) {
-    const prev = (current.providers || {})[p.name] || {};
+    const prev = prevProviders[p.name] || {};
     providers[p.name] = {
       model: p.model || prev.model || DEFAULT_MODELS[p.name] || 'unknown',
-      baseUrl: p.baseUrl || prev.baseUrl || DEFAULT_BASE_URLS[p.name] || 'https://'
+      baseUrl: p.baseUrl || prev.baseUrl || DEFAULT_BASE_URLS[p.name] || ''
     };
-    if (p.key) {
-      providers[p.name].apiKey = p.key;
-    } else {
-      delete providers[p.name].apiKey;
+    if (p.key) providers[p.name].apiKey = p.key;
+  }
+
+  for (const [name, prev] of Object.entries(prevProviders)) {
+    if (providers[name] || !prev || typeof prev !== 'object') continue;
+    if (prev.apiKey) {
+      providers[name] = { ...prev };
     }
   }
 

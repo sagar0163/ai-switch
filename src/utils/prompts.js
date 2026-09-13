@@ -1,10 +1,10 @@
 /**
  * Interactive prompt helpers.
  *
- * `hidden()` reads a secret with terminal echo disabled (raw mode) so keys are
- * never printed to the screen. When stdin is not a TTY (piped input, tests) it
- * falls back to a plain line read so `echo $KEY | ai-switch keys set openai`
- * still works.
+ * On a TTY, `text()`/`confirm()` use cooked-mode readline and `hidden()` reads
+ * a secret with terminal echo disabled (raw mode) so keys are never printed.
+ * On non-TTY stdin (piped input, tests) the same helpers drain lines from a
+ * shared queue, so `printf 'y\nsk-...\n...' | ai-switch init` works too.
  */
 
 const readline = require('readline');
@@ -14,23 +14,53 @@ class Prompter {
     this.input = input;
     this.output = output;
     this._rl = null;
+    this._ttd = false;
+    this._lineQueue = [];
+    this._waiters = [];
   }
 
-  _interface() {
-    if (!this._rl) {
-      this._rl = readline.createInterface({ input: this.input, output: this.output });
-    }
+  _setupTTYInterface() {
+    if (this._rl) return this._rl;
+    this._rl = readline.createInterface({ input: this.input, output: this.output });
     return this._rl;
   }
 
+  _setupPipedBuffer() {
+    if (this._rl) return this._rl;
+    this._rl = true;
+    const rl = readline.createInterface({ input: this.input });
+    rl.on('line', (line) => {
+      if (this._waiters.length > 0) this._waiters.shift()(line);
+      else this._lineQueue.push(line);
+    });
+    rl.on('close', () => {
+      this._closed = true;
+      while (this._waiters.length > 0) this._waiters.shift()('');
+    });
+    return rl;
+  }
+
+  _nextPipedLine() {
+    this._setupPipedBuffer();
+    if (this._lineQueue.length > 0) {
+      return Promise.resolve(this._lineQueue.shift());
+    }
+    if (this._closed) return Promise.resolve('');
+    return new Promise((resolve) => this._waiters.push(resolve));
+  }
+
   /**
-   * Ask a plain question. The answer is not echoed back in the response.
+   * Ask a plain question. On a TTY the user's keystrokes echo normally.
    * @param {string} query - Invitation text
    * @returns {Promise<string>} Trimmed answer
    */
   text(query) {
+    this.output.write(query);
+    if (!this.input.isTTY) {
+      return this._nextPipedLine().then((line) => String(line).trim());
+    }
     return new Promise((resolve) => {
-      this._interface().question(query, (answer) => resolve(String(answer).trim()));
+      this._setupTTYInterface().question('', (answer) => resolve(String(answer).trim()));
     });
   }
 
@@ -48,19 +78,18 @@ class Prompter {
   }
 
   /**
-   * Read a secret without echoing it when possible. Never returns the caller
-   * the responsibility to print it.
+   * Read a secret without echoing it to the terminal. On non-TTY stdin the
+   * value is consumed from the pipe and never printed by this CLI.
    * @param {string} query - Invitation text
-   * @returns {Promise<string>} The typed secret
+   * @returns {Promise<string>} The typed/piped secret (trimmed)
    */
   hidden(query) {
     this.output.write(query);
-    return new Promise((resolve, reject) => {
-      if (!this.input.isTTY) {
-        this._interface().question('', (answer) => resolve(String(answer).trim()));
-        return;
-      }
+    if (!this.input.isTTY) {
+      return this._nextPipedLine().then((line) => String(line).trim());
+    }
 
+    return new Promise((resolve, reject) => {
       readline.emitKeypressEvents(this.input);
       this.input.setRawMode(true);
       this.input.resume();
