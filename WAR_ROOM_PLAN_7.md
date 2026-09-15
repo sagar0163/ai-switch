@@ -16,6 +16,6 @@ usage GIF, and GitHub repo description.
 - [x] Tests for init.js (suggestChain, probe, buildInitConfig, wizard with injected prompter)
 - [x] README rewrite: value-promise header, end-to-end quickstart, why-vs-llm/aichat/LiteLLM table, usage GIF
 - [x] Generate docs/ai-switch-demo.gif (ffmpeg/ImageMagick) for the README
-- [ ] CHANGELOG + package.json description/version bump + examples/config.json touch
+- [x] CHANGELOG + package.json description/version bump + examples/config.json touch
 - [ ] Set GitHub repository description
 - [ ] Full jest + eslint pass; remove WAR_ROOM_PLAN_7.md; final commit; push branch
