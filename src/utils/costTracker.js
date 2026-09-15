@@ -135,44 +135,51 @@ class CostTracker {
 
     const checkConstraints = (budget, currentCost, scopeName) => {
       if (!budget) return { allowed: true };
-      
+
       let warning = null;
       if (budget.monthly) {
         if (budget.action === 'hard' && currentCost.monthly >= budget.monthly) {
           return { allowed: false, reason: `Monthly budget exceeded for ${scopeName} (${currentCost.monthly} >= ${budget.monthly})` };
         } else if (currentCost.monthly >= budget.monthly) {
-          warning = `Monthly budget exceeded for ${scopeName}`;
+          warning = `Monthly budget exceeded for ${scopeName} (${currentCost.monthly} >= ${budget.monthly})`;
         }
       }
-      
+
       if (budget.daily) {
         if (budget.action === 'hard' && currentCost.daily >= budget.daily) {
           return { allowed: false, reason: `Daily budget exceeded for ${scopeName} (${currentCost.daily} >= ${budget.daily})` };
         } else if (currentCost.daily >= budget.daily) {
-          warning = `Daily budget exceeded for ${scopeName}`;
+          warning = `Daily budget exceeded for ${scopeName} (${currentCost.daily} >= ${budget.daily})`;
         }
       }
-      
+
       return { allowed: true, warning };
     };
+
+    const warnings = [];
 
     // Check total budget
     if (configBudgets.total) {
       const totalCosts = { daily: this.data.dailyCost.total, monthly: this.data.monthlyCost.total };
       const result = checkConstraints(configBudgets.total, totalCosts, 'total');
       if (!result.allowed) return result;
+      if (result.warning) warnings.push(result.warning);
     }
 
     // Check provider budget
     if (provider && configBudgets.providers && configBudgets.providers[provider]) {
-      const pCosts = { 
-        daily: this.data.dailyCost.byProvider[provider] || 0, 
-        monthly: this.data.monthlyCost.byProvider[provider] || 0 
+      const pCosts = {
+        daily: this.data.dailyCost.byProvider[provider] || 0,
+        monthly: this.data.monthlyCost.byProvider[provider] || 0
       };
       const result = checkConstraints(configBudgets.providers[provider], pCosts, provider);
       if (!result.allowed) return result;
+      if (result.warning) warnings.push(result.warning);
     }
 
+    if (warnings.length > 0) {
+      return { allowed: true, warning: warnings.join('; ') };
+    }
     return { allowed: true };
   }
 

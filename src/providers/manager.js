@@ -7,7 +7,7 @@ const { OpenAIProvider } = require('./openai');
 const { AnthropicProvider } = require('./anthropic');
 const { GoogleProvider } = require('./google');
 const { OllamaProvider } = require('./ollama');
-const { getModelTier, meetsTier } = require('../utils/capabilities');
+const { getModelTier, meetsTier, TIER_LEVELS } = require('../utils/capabilities');
 const { getPricing } = require('../utils/pricing');
 
 const DEFAULT_MAX_FAILURES = 3;
@@ -111,10 +111,16 @@ class ProviderManager {
   }
 
   getBestAvailable(prompt = null, tier = null) {
+    if (tier && !TIER_LEVELS[tier]) {
+      throw new Error(`Unknown tier "${tier}". Valid tiers: ${Object.keys(TIER_LEVELS).join(', ')}`);
+    }
+
     const rationale = {
       evaluated: [],
       decision: null,
-      reason: null
+      reason: null,
+      warnings: [],
+      requiredTier: tier || 'auto (any eligible provider)'
     };
     
     const configBudgets = this.config.get('costTracking.budgets');
@@ -124,6 +130,9 @@ class ProviderManager {
       const totalBudgetStatus = this.costs.checkBudget(configBudgets, null);
       if (!totalBudgetStatus.allowed) {
         throw new Error(totalBudgetStatus.reason || 'Total budget exceeded');
+      }
+      if (totalBudgetStatus.warning) {
+        rationale.warnings.push(totalBudgetStatus.warning);
       }
     }
 
@@ -159,6 +168,7 @@ class ProviderManager {
         costScore,
         cooldown: isCooldown,
         budgetAllowed: pBudgetStatus.allowed,
+        budgetWarning: pBudgetStatus.warning || null,
         eligible: false
       };
 
@@ -177,6 +187,10 @@ class ProviderManager {
         }
       }
 
+      if (pBudgetStatus.warning) {
+        rationale.warnings.push(pBudgetStatus.warning);
+      }
+
       rationale.evaluated.push(providerInfo);
     }
 
@@ -191,6 +205,9 @@ class ProviderManager {
     }
 
     rationale.decision = bestProvider.name;
+    if (!rationale.reason) {
+      rationale.reason = `Cheapest eligible provider meeting the required tier (${rationale.requiredTier}) with budget and cooldown checks`;
+    }
     bestProvider.rationale = rationale;
     
     return bestProvider;

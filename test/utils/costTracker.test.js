@@ -182,6 +182,35 @@ describe('CostTracker cache hits', () => {
   });
 });
 
+describe('CostTracker budget caps vs cache hits', () => {
+  it('cache hits do not add to daily/monthly spend', () => {
+    const ct = tmpTracker();
+    ct.record('openai', { model: 'gpt-4o', inputTokens: 1000, outputTokens: 500, cacheReadTokens: 0, cacheCreationTokens: 0 });
+    const before = ct.data.dailyCost.total;
+
+    ct.recordCacheHit('openai');
+    ct.recordCacheHit('openai');
+
+    expect(ct.data.cacheHits).toBe(2);
+    expect(ct.data.dailyCost.total).toBeCloseTo(before, 8);
+    expect(ct.data.monthlyCost.total).toBeCloseTo(before, 8);
+  });
+
+  it('serving cache hits keeps routing under a hard daily cap that is nearly spent', () => {
+    const ct = tmpTracker();
+    const budgets = { total: { daily: 1, action: 'hard' } };
+
+    ct._updatePeriodicCosts('openai', 0.8);
+    expect(ct.checkBudget(budgets).allowed).toBe(true);
+
+    for (let i = 0; i < 5; i++) ct.recordCacheHit('openai');
+
+    // spend unchanged -> still allowed
+    expect(ct.checkBudget(budgets).allowed).toBe(true);
+    expect(ct.data.dailyCost.total).toBeCloseTo(0.8, 8);
+  });
+});
+
 describe('CostTracker persistence and reset', () => {
   it('persists the ledger and reloads it', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-switch-per-'));

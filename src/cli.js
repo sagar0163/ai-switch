@@ -79,12 +79,12 @@ program
 
     console.log(chalk.bold('\nConfigured Providers:\n'));
     providers.forEach(p => {
-      const status = p.available ? chalk.green('✓') : chalk.red('✗');
+      const mark = p.available ? chalk.green('✓') : chalk.red('✗');
       const prefix = p.isDefault ? ' *' : '  ';
       
       const costStr = p.lastCost ? chalk.yellow(`${p.lastCost.toFixed(4)}`) : 'No usage';
       const healthStr = p.inCooldown ? chalk.red(`Cooling down (${p.cooldownRemaining}s)`) : (p.available ? chalk.green('Healthy') : chalk.red('Unavailable'));
-      console.log(`${prefix} ${chalk.cyan(p.name)} (${p.model}) - ${healthStr} | Last known cost: ${costStr}`);
+      console.log(`${prefix} ${mark} ${chalk.cyan(p.name)} (${p.model}) - ${healthStr} | Last known cost: ${costStr}`);
     });
     console.log('');
   });
@@ -101,13 +101,16 @@ program
     
     console.log(chalk.bold('\nRouting Decision:'));
     console.log(`  Selected: ${chalk.green(r.decision)}`);
-    console.log(`  Reason: ${r.reason}\n`);
-    console.log(chalk.bold('Evaluated Providers:'));
+    console.log(`  Reason: ${r.reason}`);
+    console.log(`  Required tier: ${r.requiredTier}`);
+    r.warnings.forEach(w => console.log(chalk.yellow(`  Warning: ${w}`)));
+    console.log(chalk.bold('\nEvaluated Providers:'));
     r.evaluated.forEach(p => {
        const status = p.eligible ? chalk.green('Eligible') : chalk.red('Ineligible');
        console.log(`  - ${chalk.cyan(p.provider)} (${p.model})`);
        console.log(`      Tier: ${p.tier} | Cost Score: ${p.costScore === 999999 ? 'Unknown' : p.costScore}`);
        console.log(`      Status: ${status} (${p.reason})`);
+       if (p.budgetWarning) console.log(`      ${chalk.yellow(`Budget: ${p.budgetWarning}`)}`);
     });
     console.log('');
   });
@@ -116,41 +119,40 @@ program
 program
   .command('compare <prompt>')
   .description('Run prompt across all configured providers and report latency/cost')
-  .action(async (prompt) => {
+  .option('-r, --runs <n>', 'Number of benchmark runs per provider', parseInt)
+  .option('-p, --provider <name>', 'Only benchmark a specific provider')
+  .option('-m, --model <model>', 'Specific model to benchmark')
+  .action(async (prompt, options) => {
     const ai = getAISwitch();
-    const providers = ai.providers.getOrder();
-    
-    console.log(chalk.bold(`\nBenchmarking prompt across ${providers.length} providers...\n`));
-    
-    const results = [];
-    
-    for (const p of providers) {
-      process.stdout.write(`Testing ${p.name}... `);
-      const beforeCost = (ai.costs.getSummary().byProvider.find(st => st.provider === p.name) || {}).cost || 0;
-      const start = Date.now();
-      try {
-        const response = await ai.ask(prompt, { provider: p.name });
-        const latency = Date.now() - start;
-        
-        // Approximate cost
-        let cost = 0;
-        const costsSummary = ai.costs.getSummary();
-        const pStats = costsSummary.byProvider.find(st => st.provider === p.name);
-        if (pStats) {
-           cost = pStats.cost - beforeCost; // This is total cost. Actually we want the cost of THIS request.
-           // To get the cost of this request, we could compute it before and after.
-        }
-        
-        console.log(chalk.green(`${latency}ms`));
-        results.push({ provider: p.name, latency: `${latency}ms`, cost: `${cost.toFixed(6)}`, ttfb: 'N/A', status: 'Success' });
-      } catch (err) {
-        console.log(chalk.red('Failed'));
-        results.push({ provider: p.name, latency: '-', status: err.message });
+    const providers = options.provider
+      ? [ai.providers.getProvider(options.provider)]
+      : ai.providers.getOrder();
+
+    console.log(chalk.bold(`\nBenchmarking prompt across ${providers.length} provider(s) (${options.runs || 1} run(s) each)...\n`));
+
+    const results = await ai.compare(prompt, {
+      runs: options.runs || 1,
+      model: options.model
+    });
+
+    const table = results.map((r) => ({
+      provider: r.provider,
+      model: r.model,
+      'latency (ms)': r.latencyMs == null ? '-' : r.latencyMs,
+      'TTFB (ms)': r.ttfbMs == null ? '-' : r.ttfbMs,
+      'cost (USD)': r.costUsd == null ? '-' : Number(r.costUsd).toFixed(6),
+      'cost source': r.costSource || '-'
+    }));
+
+    console.log(chalk.bold('\nBenchmark Results (median):'));
+    console.table(table);
+
+    results.forEach((r) => {
+      if (r.errors && r.errors.length > 0) {
+        console.log(chalk.red(`  ${r.provider}: ${r.errors.length}/${r.runs} runs failed`));
+        r.errors.slice(0, 3).forEach((e) => console.log(chalk.dim(`      - ${e}`)));
       }
-    }
-    
-    console.log(chalk.bold('\nBenchmark Results:'));
-    console.table(results);
+    });
     console.log('');
   });
 

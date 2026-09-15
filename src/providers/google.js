@@ -6,6 +6,7 @@
 const { BaseProvider } = require('./base');
 const { ProviderError } = require('../utils/errors');
 const { parseGoogleUsage } = require('../utils/usage');
+const { parseSSE } = require('../utils/stream');
 
 class GoogleProvider extends BaseProvider {
   constructor(config) {
@@ -62,6 +63,73 @@ class GoogleProvider extends BaseProvider {
         text: data.candidates[0].content.parts[0].text.trim(),
         usage: parseGoogleUsage(data, model)
       };
+    } catch (error) {
+      if (error instanceof ProviderError) throw error;
+      throw new ProviderError(error.message, this.name);
+    }
+  }
+
+  /**
+   * Stream text deltas from the generateContent stream endpoint.
+   * Chunks carry cumulative text, so only the newly appended portion yields.
+   */
+  async *stream(prompt, options = {}) {
+    const model = options.model || this.defaultModel;
+    const apiKey = this.config.apiKey;
+    const messages = options.messages || [{ role: 'user', content: prompt }];
+    const contents = messages.map((m) => ({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: m.content }]
+    }));
+    this.streamUsage = null;
+
+    let response;
+    try {
+      response = await fetch(
+        `${this.baseUrl}/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            contents,
+            generationConfig: {
+              temperature: options.temperature ?? 0.7,
+              maxOutputTokens: options.maxTokens || 2048
+            }
+          })
+        }
+      );
+    } catch (error) {
+      throw new ProviderError(error.message, this.name);
+    }
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new ProviderError(
+        this._formatError({ message: error.error?.message || `HTTP ${response.status}` }),
+        this.name,
+        response.status,
+        response.headers.get('retry-after')
+      );
+    }
+
+    let prev = '';
+    try {
+      for await (const data of parseSSE(response)) {
+        if (data.usageMetadata) {
+          this.streamUsage = parseGoogleUsage(data, model);
+        }
+        const text = data.candidates?.[0]?.content?.parts
+          ?.map((p) => p.text || '')
+          .join('') || '';
+        if (!text) continue;
+
+        const delta = text.startsWith(prev) ? text.slice(prev.length) : text;
+        prev = text;
+        if (delta) yield delta;
+      }
     } catch (error) {
       if (error instanceof ProviderError) throw error;
       throw new ProviderError(error.message, this.name);
