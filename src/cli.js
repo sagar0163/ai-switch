@@ -260,9 +260,11 @@ keysCmd
         ? chalk.cyan(entry.source)
         : chalk.dim('not configured');
       const envDetail = entry.envVar ? chalk.dim(` (${entry.envVar})`) : '';
-      const key = entry.source ? chalk.green(entry.masked) : chalk.dim('—');
+      const key = entry.source
+        ? chalk.green(entry.masked.padEnd(22))
+        : chalk.dim('—'.padEnd(22));
       const model = entry.model ? ` ${chalk.dim(entry.model)}` : '';
-      console.log(`  ${chalk.cyan(entry.provider.padEnd(10))}${key.padEnd(22)}${source}${envDetail}${model}`);
+      console.log(`  ${chalk.cyan(entry.provider.padEnd(10))}${key}${source}${envDetail}${model}`);
     }
     console.log(chalk.dim('\nKeys are shown masked. `ai-switch config` for the full effective config.'));
   });
