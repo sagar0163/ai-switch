@@ -9,10 +9,10 @@ usage GIF, and GitHub repo description.
 ## Subtasks
 - [x] Keys util: ENV_KEYS mapping, maskKey, key source resolution (env wins over config) + unit tests
 - [x] ConfigManager: env precedence in getProviderConfig, setKey/removeKey/listKeys/maskedView, replace() + unit tests
-- [ ] CLI `keys set|list|remove` + `config` commands (masked output, never print plaintext keys)
+- [x] CLI `keys set|list|remove` + `config` commands (masked output, never print plaintext keys)
 - [x] Prompter: interactive confirm/text + hidden (masked) key input in src/utils/prompts.js
 - [x] src/init.js: env detection, key collection, probe validation, suggestChain(), buildInitConfig(), runInit() wizard
-- [ ] CLI `init` command wired to the wizard
+- [x] CLI `init` command wired to the wizard
 - [x] Tests for init.js (suggestChain, probe, buildInitConfig, wizard with injected prompter)
 - [ ] README rewrite: value-promise header, end-to-end quickstart, why-vs-llm/aichat/LiteLLM table, usage GIF
 - [ ] Generate docs/ai-switch-demo.gif (ffmpeg/ImageMagick) for the README
