@@ -1,7 +1,7 @@
 {
   "name": "ai-switch",
-  "version": "0.1.0",
-  "description": "Unified CLI for multiple AI LLM providers with failover, caching, and cost tracking",
+  "version": "0.2.0",
+  "description": "Intelligent CLI switch between AI providers — cost-aware routing, failover, budgets, and a cost ledger",
   "main": "src/index.js",
   "bin": {
     "ai-switch": "src/cli.js"

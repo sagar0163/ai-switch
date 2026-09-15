@@ -14,7 +14,7 @@ const { runBenchmark } = require('./utils/benchmark');
 
 class AISwitch {
   constructor(options = {}) {
-    this.config = new ConfigManager(options.configPath);
+    this.config = new ConfigManager({ configPath: options.configPath, env: options.env });
     this.cache = new CacheManager(this.config.get('cache'));
     this.costs = new CostTracker(this.config.get('costTracking'));
     this.providers = new ProviderManager(this.config, this.cache, this.costs);

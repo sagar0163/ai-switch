@@ -9,6 +9,10 @@ const { Command } = require('commander');
 const chalk = require('chalk');
 const ora = require('ora');
 const { AISwitch } = require('./index');
+const { ConfigManager } = require('./utils/config');
+const { Prompter } = require('./utils/prompts');
+const { runInit } = require('./init');
+const { PROVIDER_ORDER, maskKey } = require('./utils/keys');
 const { version } = require('../package.json');
 
 const program = new Command();
@@ -204,21 +208,167 @@ program
   });
 
 // Cache command
-program
+const cacheCmd = program
   .command('cache')
-  .description('Manage response cache')
-  .command('clear', 'Clear the response cache')
-  .action(() => {
-    console.log(chalk.yellow('Use: ai-switch cache clear'));
-  });
-
-program
-  .command('cache clear')
+  .description('Manage the response cache');
+cacheCmd
+  .command('clear')
   .description('Clear the response cache')
   .action(async () => {
     const ai = getAISwitch();
     await ai.clearCache();
     console.log(chalk.green('Cache cleared successfully.'));
+  });
+
+// Interactive first-run setup
+program
+  .command('init')
+  .description('Interactive first-run setup (detect env keys, ask, validate, configure)')
+  .action(async () => {
+    try {
+      const config = new ConfigManager();
+      await runInit({ config });
+    } catch (error) {
+      console.error(chalk.red('Setup failed:'), error.message);
+      process.exit(1);
+    }
+  });
+
+// Key management
+function resolveProviderName(name) {
+  const input = String(name || '').toLowerCase();
+  if (PROVIDER_ORDER.includes(input)) return input;
+  console.error(chalk.red('Error:'), `Unknown provider "${name}". Valid providers: ${PROVIDER_ORDER.join(', ')}`);
+  process.exit(1);
+  return null;
+}
+
+const keysCmd = program
+  .command('keys')
+  .description('Manage provider API keys (keys are never printed in plaintext)');
+
+keysCmd
+  .command('list')
+  .description('List providers and where their key comes from (masked)')
+  .action(() => {
+    const config = new ConfigManager();
+    const keys = config.listKeys();
+
+    console.log(chalk.bold('\nAPI Keys:\n'));
+    for (const entry of keys) {
+      const source = entry.source
+        ? chalk.cyan(entry.source)
+        : chalk.dim('not configured');
+      const envDetail = entry.envVar ? chalk.dim(` (${entry.envVar})`) : '';
+      const key = entry.source
+        ? chalk.green(entry.masked.padEnd(22))
+        : chalk.dim('—'.padEnd(22));
+      const model = entry.model ? ` ${chalk.dim(entry.model)}` : '';
+      console.log(`  ${chalk.cyan(entry.provider.padEnd(10))}${key}${source}${envDetail}${model}`);
+    }
+    console.log(chalk.dim('\nKeys are shown masked. `ai-switch config` for the full effective config.'));
+  });
+
+keysCmd
+  .command('set <provider>')
+  .description('Store an API key for a provider (prompted; never echoed or printed)')
+  .action(async (providerName) => {
+    const provider = resolveProviderName(providerName);
+    const config = new ConfigManager();
+
+    let key;
+    try {
+      const prompter = new Prompter();
+      key = await prompter.hidden(`Enter the ${provider} API key (sk-...): `);
+    } catch (error) {
+      console.error(chalk.red('Cancelled.'), error.message);
+      process.exit(1);
+    }
+
+    if (!key) {
+      console.error(chalk.red('Error:'), 'No key provided.');
+      process.exit(1);
+    }
+
+    try {
+      config.setKey(provider, key);
+    } catch (error) {
+      console.error(chalk.red('Error:'), error.message);
+      process.exit(1);
+    }
+
+    const envKey = config.getProviderConfig(provider).apiKeyEnvVar;
+    console.log(chalk.green(`✓ Stored API key for ${provider} (${maskKey(key)}).`));
+    if (envKey) {
+      console.log(chalk.yellow(`  Note: ${envKey} is set in your environment and takes precedence.`));
+    }
+  });
+
+keysCmd
+  .command('remove <provider>')
+  .description('Remove a stored API key for a provider (env-var keys are unaffected)')
+  .action((providerName) => {
+    const provider = resolveProviderName(providerName);
+    const config = new ConfigManager();
+
+    if (config.removeKey(provider)) {
+      console.log(chalk.green(`✓ Removed stored API key for ${provider}.`));
+    } else {
+      console.log(chalk.dim(`No stored key for ${provider} to remove.`));
+    }
+
+    const eff = config.getProviderConfig(provider);
+    if (eff && eff.apiKey) {
+      console.log(chalk.yellow(`  Note: ${eff.apiKeyEnvVar || 'an env var'} is still supplying a key for ${provider}.`));
+    }
+  });
+
+// Effective config (secrets masked)
+program
+  .command('config')
+  .description('Show the effective configuration with secrets masked')
+  .action(() => {
+    const config = new ConfigManager();
+    const view = config.maskedView();
+    const providers = config.getAllProviders();
+    const hasEnvKey = Object.values(view.providers).some((p) => p.keySource === 'env');
+
+    console.log(chalk.bold('\nEffective configuration'));
+    console.log(`  Config file:  ${chalk.cyan(view.configPath)}`);
+
+    if (providers.length === 0 || (!config.hasConfigFile && !hasEnvKey)) {
+      console.log(chalk.yellow('\n  Nothing configured yet.') + chalk.cyan(' Run:  ai-switch init'));
+      console.log(chalk.dim('  (or export OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY)'));
+      return;
+    }
+
+    const failover = typeof view.failover === 'object' && view.failover !== null && !Array.isArray(view.failover)
+      ? view.failover
+      : { enabled: view.failover !== false };
+    const order = view.failoverOrder.length > 0 ? view.failoverOrder : providers;
+
+    console.log(`  Default:       ${chalk.bold(view.defaultProvider || '—')}`);
+    console.log(`  Failover:      ${failover.enabled ? chalk.green('enabled') : chalk.dim('disabled')} (${order.join(' → ')})`);
+    if (view.cache) {
+      console.log(`  Cache:         ${view.cache.enabled ? chalk.green('enabled') : chalk.dim('disabled')}${view.cache.ttl ? ` (ttl ${view.cache.ttl}s)` : ''}`);
+    }
+    console.log(`  Cost tracking: ${view.costTracking && view.costTracking.enabled !== false ? chalk.green('enabled') : chalk.dim('disabled')}`);
+
+    console.log(chalk.bold('\nProviders:'));
+    for (const name of PROVIDER_ORDER) {
+      const p = view.providers[name];
+      if (!p) continue;
+      const model = p.model ? p.model : '—';
+      const key = p.keySource
+        ? `key: ${chalk.green(p.apiKey)} ${chalk.dim(`(${p.keySource}${p.keyEnvVar ? ` ${p.keyEnvVar}` : ''})`)}`
+        : chalk.dim('no key');
+      const url = p.baseUrl ? chalk.dim(p.baseUrl) : '';
+      console.log(`  ${chalk.cyan(name.padEnd(10))} ${model.padEnd(28)} ${key} ${url}`);
+    }
+    if (!Object.values(view.providers).some((p) => p.keySource)) {
+      console.log(chalk.yellow('\n  Hint: set a key with `ai-switch keys set <provider>` or export OPENAI_API_KEY.'));
+    }
+    console.log('');
   });
 
 // Interactive chat mode
