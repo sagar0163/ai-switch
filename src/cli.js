@@ -95,24 +95,29 @@ program
   .description('Dry-run the routing engine for a prompt')
   .option('--tier <tier>', 'Required quality tier')
   .action((prompt, options) => {
-    const ai = getAISwitch();
-    const best = ai.providers.getBestAvailable(prompt, options.tier);
-    const r = best.rationale;
+    try {
+      const ai = getAISwitch();
+      const best = ai.providers.getBestAvailable(prompt, options.tier);
+      const r = best.rationale;
     
-    console.log(chalk.bold('\nRouting Decision:'));
-    console.log(`  Selected: ${chalk.green(r.decision)}`);
-    console.log(`  Reason: ${r.reason}`);
-    console.log(`  Required tier: ${r.requiredTier}`);
-    r.warnings.forEach(w => console.log(chalk.yellow(`  Warning: ${w}`)));
-    console.log(chalk.bold('\nEvaluated Providers:'));
-    r.evaluated.forEach(p => {
-       const status = p.eligible ? chalk.green('Eligible') : chalk.red('Ineligible');
-       console.log(`  - ${chalk.cyan(p.provider)} (${p.model})`);
-       console.log(`      Tier: ${p.tier} | Cost Score: ${p.costScore === 999999 ? 'Unknown' : p.costScore}`);
-       console.log(`      Status: ${status} (${p.reason})`);
-       if (p.budgetWarning) console.log(`      ${chalk.yellow(`Budget: ${p.budgetWarning}`)}`);
-    });
-    console.log('');
+      console.log(chalk.bold('\nRouting Decision:'));
+      console.log(`  Selected: ${chalk.green(r.decision)}`);
+      console.log(`  Reason: ${r.reason}`);
+      console.log(`  Required tier: ${r.requiredTier}`);
+      r.warnings.forEach(w => console.log(chalk.yellow(`  Warning: ${w}`)));
+      console.log(chalk.bold('\nEvaluated Providers:'));
+      r.evaluated.forEach(p => {
+         const status = p.eligible ? chalk.green('Eligible') : chalk.red('Ineligible');
+         console.log(`  - ${chalk.cyan(p.provider)} (${p.model})`);
+         console.log(`      Tier: ${p.tier} | Cost Score: ${p.costScore === 999999 ? 'Unknown' : p.costScore}`);
+         console.log(`      Status: ${status} (${p.reason})`);
+         if (p.budgetWarning) console.log(`      ${chalk.yellow(`Budget: ${p.budgetWarning}`)}`);
+      });
+      console.log('');
+    } catch (error) {
+      console.error(chalk.red('Error:'), error.message);
+      process.exit(1);
+    }
   });
 
 // Compare command
@@ -123,37 +128,42 @@ program
   .option('-p, --provider <name>', 'Only benchmark a specific provider')
   .option('-m, --model <model>', 'Specific model to benchmark')
   .action(async (prompt, options) => {
-    const ai = getAISwitch();
-    const providers = options.provider
-      ? [ai.providers.getProvider(options.provider)]
-      : ai.providers.getOrder();
+    try {
+      const ai = getAISwitch();
+      const providers = options.provider
+        ? [ai.providers.getProvider(options.provider)]
+        : ai.providers.getOrder();
 
-    console.log(chalk.bold(`\nBenchmarking prompt across ${providers.length} provider(s) (${options.runs || 1} run(s) each)...\n`));
+      console.log(chalk.bold(`\nBenchmarking prompt across ${providers.length} provider(s) (${options.runs || 1} run(s) each)...\n`));
 
-    const results = await ai.compare(prompt, {
-      runs: options.runs || 1,
-      model: options.model
-    });
+      const results = await ai.compare(prompt, {
+        runs: options.runs || 1,
+        model: options.model
+      });
 
-    const table = results.map((r) => ({
-      provider: r.provider,
-      model: r.model,
-      'latency (ms)': r.latencyMs == null ? '-' : r.latencyMs,
-      'TTFB (ms)': r.ttfbMs == null ? '-' : r.ttfbMs,
-      'cost (USD)': r.costUsd == null ? '-' : Number(r.costUsd).toFixed(6),
-      'cost source': r.costSource || '-'
-    }));
+      const table = results.map((r) => ({
+        provider: r.provider,
+        model: r.model,
+        'latency (ms)': r.latencyMs == null ? '-' : r.latencyMs,
+        'TTFB (ms)': r.ttfbMs == null ? '-' : r.ttfbMs,
+        'cost (USD)': r.costUsd == null ? '-' : Number(r.costUsd).toFixed(6),
+        'cost source': r.costSource || '-'
+      }));
 
-    console.log(chalk.bold('\nBenchmark Results (median):'));
-    console.table(table);
+      console.log(chalk.bold('\nBenchmark Results (median):'));
+      console.table(table);
 
-    results.forEach((r) => {
-      if (r.errors && r.errors.length > 0) {
-        console.log(chalk.red(`  ${r.provider}: ${r.errors.length}/${r.runs} runs failed`));
-        r.errors.slice(0, 3).forEach((e) => console.log(chalk.dim(`      - ${e}`)));
-      }
-    });
-    console.log('');
+      results.forEach((r) => {
+        if (r.errors && r.errors.length > 0) {
+          console.log(chalk.red(`  ${r.provider}: ${r.errors.length}/${r.runs} runs failed`));
+          r.errors.slice(0, 3).forEach((e) => console.log(chalk.dim(`      - ${e}`)));
+        }
+      });
+      console.log('');
+    } catch (error) {
+      console.error(chalk.red('Error:'), error.message);
+      process.exit(1);
+    }
   });
 
 // Costs command
