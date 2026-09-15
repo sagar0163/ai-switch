@@ -1,6 +1,12 @@
 # Changelog
 
-## [Unreleased]
+## [0.2.0] - Unreleased
+
+### Added
+- `ai-switch init`: interactive first-run setup wizard.
+- `ai-switch keys set|list|remove` and `ai-switch config` for secure key management.
+- Environment variable API key precedence over config files.
+- Masked keys in output (keys are never printed in plaintext).
 
 ### Added
 - Cost-aware routing: with no provider flags, requests go to the cheapest configured provider whose model meets the optional `--tier fast|balanced|strong`.
@@ -23,10 +29,3 @@
 - Cost tracking per provider
 - Interactive chat mode
 - Comprehensive CLI with multiple commands
-
-### Features
-- `ai-switch ask` - Query AI providers
-- `ai-switch providers` - List configured providers
-- `ai-switch costs` - View usage and costs
-- `ai-switch cache` - Manage response cache
-- `ai-switch chat` - Interactive chat session
