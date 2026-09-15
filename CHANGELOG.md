@@ -1,6 +1,12 @@
 # Changelog
 
-## [Unreleased]
+## [0.2.0] - Unreleased
+
+### Added
+- `ai-switch init`: interactive first-run setup wizard.
+- `ai-switch keys set|list|remove` and `ai-switch config` for secure key management.
+- Environment variable API key precedence over config files.
+- Masked keys in output (keys are never printed in plaintext).
 
 ### Changed
 - Cost accounting now uses real provider-billed `usage` fields (OpenAI `usage.prompt_tokens`/`completion_tokens`, Anthropic `input_tokens`/`output_tokens` incl. cache reads, Gemini `usageMetadata`, Ollama `prompt_eval_count`/`eval_count`) instead of a `text.length / 4` character heuristic.
@@ -16,10 +22,3 @@
 - Cost tracking per provider
 - Interactive chat mode
 - Comprehensive CLI with multiple commands
-
-### Features
-- `ai-switch ask` - Query AI providers
-- `ai-switch providers` - List configured providers
-- `ai-switch costs` - View usage and costs
-- `ai-switch cache` - Manage response cache
-- `ai-switch chat` - Interactive chat session
