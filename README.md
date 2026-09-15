@@ -1,41 +1,57 @@
 # AI-Switch
 
-A CLI tool that provides a unified interface for multiple AI LLM providers with automatic failover, cost tracking, and response caching.
+**The intelligent switch between all your AI providers — cost-aware routing, failover, and a running cost ledger.**
 
-## Features
+![AI-Switch Demo](docs/ai-switch-demo.gif)
 
-- **Multi-Provider Support**: OpenAI, Anthropic, Google AI, Ollama (local)
-- **Automatic Failover**: Falls back to backup provider on failure
-- **Cost Tracking**: Tracks API usage and costs per provider
-- **Response Caching**: Avoids redundant API calls
-- **Unified Interface**: Single CLI for all providers
+AI-Switch is a unified CLI tool for OpenAI, Anthropic, Google Gemini, and Ollama. It doesn't just route your prompts—it protects your API budget, automatically falls back to secondary models if one goes down, and manages your keys securely without requiring manual JSON configuration.
 
-## Installation
+## Quickstart
+
+Get started in under a minute with the interactive setup wizard:
 
 ```bash
+# 1. Install globally
 npm install -g ai-switch
+
+# 2. Run the interactive setup (detects env vars, asks for keys, validates them)
+ai-switch init
+
+# 3. Ask your first question! (Auto-routes to your best available provider)
+ai-switch ask "hi"
 ```
 
-## Configuration
+## Why AI-Switch?
 
-Create `~/.ai-switch/config.json`:
+| Feature | AI-Switch | SimonW/llm | sigoden/aichat | LiteLLM (CLI) |
+|---|---|---|---|---|
+| **Primary Focus** | Cost-aware routing & resilient failover | Extensibility & SQLite logging | Chat UI & REPL | Enterprise proxy / API standardization |
+| **Interactive Setup** | Yes (`ai-switch init`) | No (manual keys) | Yes | No |
+| **Failover / Fallback** | Automatic (ordered chains, cooldowns) | No | No | Yes (mostly proxy) |
+| **Cost Ledger** | Yes (real token tracking, cache-hits) | No | No | Yes |
+| **Secure Key Storage** | Masked out, Env-var precedence | File-based | File-based | Env-var based |
+
+## Configuration & Key Management
+
+Keys are managed interactively. They are never printed to the terminal in plaintext, and environment variables always take precedence.
+
+```bash
+# Safely add or update a provider key
+ai-switch keys set anthropic
+
+# List configured providers (keys are masked)
+ai-switch keys list
+
+# View the effective configuration (resolves env vars vs file configs)
+ai-switch config
+```
+
+### Advanced Failover
+
+Configure how AI-Switch handles provider outages:
 
 ```json
 {
-  "providers": {
-    "openai": {
-      "apiKey": "sk-...",
-      "model": "gpt-4"
-    },
-    "anthropic": {
-      "apiKey": "sk-ant-...",
-      "model": "claude-3-opus-20240229"
-    }
-  },
-  "cache": {
-    "enabled": true,
-    "ttl": 3600
-  },
   "failover": {
     "enabled": true,
     "order": ["openai", "anthropic"],
@@ -45,19 +61,16 @@ Create `~/.ai-switch/config.json`:
 }
 ```
 
-`failover` accepts `true`/`false`, or an object with:
-- `order` — the default failover chain (providers are tried in this order)
-- `maxFailures` — consecutive failures before a provider is put on cooldown (default: 3)
-- `cooldownSeconds` — how long a provider is skipped after tripping the breaker (default: 60)
-
 A provider that replies with a `Retry-After` header is backed off for that window immediately.
-The `--primary`/`--backup` flags override the configured order for a single call.
+You can also override the order for a single call:
 
-### Chat mode & conversation history
+```bash
+ai-switch ask --primary anthropic --backup openai "Write a poem"
+```
 
-`ai-switch chat` keeps the full conversation and sends it to the provider on every
-turn, so the model can reference earlier messages. History is capped before it is
-sent to keep requests from ballooning:
+### Chat Mode & Context Budget
+
+`ai-switch chat` sends full conversation history to the provider, smartly trimming older messages to fit a token budget:
 
 ```json
 {
@@ -68,25 +81,9 @@ sent to keep requests from ballooning:
 }
 ```
 
-- `maxTurns` — the most recent user turns that are kept (default: `20`). Older
-  full user→assistant pairs are dropped; a leading `system` message is preserved.
-- `maxContextTokens` — an approximate combined-token budget for the request
-  (rough estimate of `chars / 4` per message, not a billing number; default: `4000`).
-  The oldest non-system messages are trimmed until the estimate fits.
+### Cost Tracking & Pricing
 
-Each turn prints a small indicator of what is being sent, e.g.
-`↪ sending 3 turns (~1,240 tokens)`.
-
-### Cost tracking & pricing
-
-Costs are computed from the real token `usage` the providers return with every
-response (OpenAI `usage.prompt_tokens`/`completion_tokens`, Anthropic
-`input_tokens`/`output_tokens` including cache reads, Gemini `usageMetadata`,
-Ollama `prompt_eval_count`/`eval_count`) — not from a character-count estimate.
-
-Prices are looked up for the actual model from a built-in table (maintained
-against [models.dev](https://models.dev)) in USD per 1M tokens, with optional
-per-model overrides under `costTracking.pricing`:
+Costs are computed from real token `usage` returned by providers. Cache hits are never double-charged. Prices are looked up from a built-in table, and you can override them:
 
 ```json
 {
@@ -99,34 +96,10 @@ per-model overrides under `costTracking.pricing`:
 }
 ```
 
-Models without a known price are **flagged** in `ai-switch costs` (`[unknown
-pricing]`) rather than silently priced at a default; add a `costTracking.pricing`
-override to price them. Cache hits are counted separately and never double-charge
-cost.
-
-## Usage
+Check your total usage at any time:
 
 ```bash
-# Ask a question (auto-selects best available provider)
-ai-switch ask "What is quantum computing?"
-
-# Use specific provider
-ai-switch ask --provider openai "Explain neural networks"
-
-# Set primary and backup providers
-ai-switch ask --primary anthropic --backup openai "Write a poem"
-
-# View cost tracking (token breakdown per provider, unknown-pricing flags)
 ai-switch costs
-
-# Clear cache
-ai-switch cache clear
-
-# List configured providers
-ai-switch providers
-
-# Start a multi-turn chat session (full history is sent each turn)
-ai-switch chat
 ```
 
 ## License
