@@ -1,0 +1,14 @@
+# Plan
+- [x] Initial commit
+- [x] Add model capability metadata for tiers (fast, balanced, strong).
+- [x] Add budget checks to `CostTracker` (soft-warn/hard-block) taking cache hits into account.
+- [x] Update `ProviderManager` to use the routing engine (`getBestAvailable(prompt, tier)`) selecting the cheapest eligible provider.
+- [x] Add `route` command, `--explain` flag to `ask`, and update `providers` command (health + last cost).
+- [x] Unit tests for selector scoring + budget enforcement (`test/routing.test.js`).
+- [x] Initial `compare` command skeleton + lint fix for unused vars in CLI.
+- [ ] Add streaming (first-token) support to providers so `compare` can report a real TTFB.
+- [ ] Rewrite `compare` behind a unit-testable benchmark util (reproducible per-provider latency / cost / ttfb table, median over `--runs`, no cache/cost-tracking contamination).
+- [ ] Budget test: cache hits do not count against spend (hard-block still permits cache hits).
+- [ ] Transparency tests: `route` rationale plain-text output + `providers` health & last-cost fields.
+- [ ] Benchmark util unit tests (median math, cost from streamed usage, table rows).
+- [ ] Run lint + full test suite, fix failures, then remove plan file and commit.
