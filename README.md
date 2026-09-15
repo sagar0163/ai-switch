@@ -104,11 +104,44 @@ pricing]`) rather than silently priced at a default; add a `costTracking.pricing
 override to price them. Cache hits are counted separately and never double-charge
 cost.
 
+### Cost-aware routing & budgets
+
+AI-Switch chooses *which* provider serves you. With no `--provider`/`--primary`/
+`--backup` given, the cheapest configured provider whose model meets the optional
+quality tier is selected based on real prices from the same pricing table:
+
+- `--tier fast|balanced|strong` — only providers whose model meets the tier are eligible (`ai-switch ask --tier strong "..."`).
+- Budget caps are checked before every request. Soft caps only warn; hard caps refuse once hit. Daily and monthly limits are supported per provider and in total:
+
+```json
+{
+  "costTracking": {
+    "enabled": true,
+    "budgets": {
+      "total":  { "monthly": 20, "daily": 2,  "action": "soft" },
+      "providers": {
+        "openai": { "monthly": 10, "action": "hard" }
+      }
+    }
+  }
+}
+```
+
+Cache hits never count against budget spend.
+
+- Every response records which provider + model served it and the actual cost — see `ai-switch providers` (health + last known cost) and `ai-switch costs`.
+
 ## Usage
 
 ```bash
-# Ask a question (auto-selects best available provider)
+# Ask a question (auto-selects cheapest eligible provider)
 ai-switch ask "What is quantum computing?"
+
+# Explain the routing decision (cost, tier, cooldowns, budgets)
+ai-switch ask --explain --tier strong "Tough math proof"
+
+# Dry-run the routing engine
+ai-switch route --tier balanced "What is quantum computing?"
 
 # Use specific provider
 ai-switch ask --provider openai "Explain neural networks"
@@ -116,13 +149,16 @@ ai-switch ask --provider openai "Explain neural networks"
 # Set primary and backup providers
 ai-switch ask --primary anthropic --backup openai "Write a poem"
 
+# Benchmark the same prompt across providers (latency / TTFB / cost)
+ai-switch compare "Summarize the plot of Dune" --runs 3
+
 # View cost tracking (token breakdown per provider, unknown-pricing flags)
 ai-switch costs
 
 # Clear cache
 ai-switch cache clear
 
-# List configured providers
+# List configured providers (health + last known cost)
 ai-switch providers
 
 # Start a multi-turn chat session (full history is sent each turn)

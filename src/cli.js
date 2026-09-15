@@ -33,6 +33,8 @@ program
   .command('ask <prompt>')
   .description('Ask an AI provider a question')
   .option('-p, --provider <name>', 'Specific provider to use (openai, anthropic, etc.)')
+  .option('--tier <tier>', 'Required quality tier (fast, balanced, strong)')
+  .option('--explain', 'Explain routing decision')
   .option('-m, --model <model>', 'Specific model to use')
   .option('-t, --temperature <value>', 'Temperature (0-1)', parseFloat)
   .option('-M, --max-tokens <value>', 'Max tokens', parseInt)
@@ -47,6 +49,8 @@ program
     try {
       const ai = getAISwitch();
       const response = await ai.ask(prompt, {
+        tier: options.tier,
+        explain: options.explain,
         provider: options.provider,
         primary: options.primary,
         backup: options.backup,
@@ -75,11 +79,91 @@ program
 
     console.log(chalk.bold('\nConfigured Providers:\n'));
     providers.forEach(p => {
-      const status = p.available ? chalk.green('✓') : chalk.red('✗');
+      const mark = p.available ? chalk.green('✓') : chalk.red('✗');
       const prefix = p.isDefault ? ' *' : '  ';
-      console.log(`${prefix} ${status} ${chalk.cyan(p.name)} - ${p.model} ${p.available ? '' : '(unavailable)'}`);
+      
+      const costStr = p.lastCost ? chalk.yellow(`${p.lastCost.toFixed(4)}`) : 'No usage';
+      const healthStr = p.inCooldown ? chalk.red(`Cooling down (${p.cooldownRemaining}s)`) : (p.available ? chalk.green('Healthy') : chalk.red('Unavailable'));
+      console.log(`${prefix} ${mark} ${chalk.cyan(p.name)} (${p.model}) - ${healthStr} | Last known cost: ${costStr}`);
     });
     console.log('');
+  });
+
+// Route command
+program
+  .command('route <prompt>')
+  .description('Dry-run the routing engine for a prompt')
+  .option('--tier <tier>', 'Required quality tier')
+  .action((prompt, options) => {
+    try {
+      const ai = getAISwitch();
+      const best = ai.providers.getBestAvailable(prompt, options.tier);
+      const r = best.rationale;
+    
+      console.log(chalk.bold('\nRouting Decision:'));
+      console.log(`  Selected: ${chalk.green(r.decision)}`);
+      console.log(`  Reason: ${r.reason}`);
+      console.log(`  Required tier: ${r.requiredTier}`);
+      r.warnings.forEach(w => console.log(chalk.yellow(`  Warning: ${w}`)));
+      console.log(chalk.bold('\nEvaluated Providers:'));
+      r.evaluated.forEach(p => {
+         const status = p.eligible ? chalk.green('Eligible') : chalk.red('Ineligible');
+         console.log(`  - ${chalk.cyan(p.provider)} (${p.model})`);
+         console.log(`      Tier: ${p.tier} | Cost Score: ${p.costScore === 999999 ? 'Unknown' : p.costScore}`);
+         console.log(`      Status: ${status} (${p.reason})`);
+         if (p.budgetWarning) console.log(`      ${chalk.yellow(`Budget: ${p.budgetWarning}`)}`);
+      });
+      console.log('');
+    } catch (error) {
+      console.error(chalk.red('Error:'), error.message);
+      process.exit(1);
+    }
+  });
+
+// Compare command
+program
+  .command('compare <prompt>')
+  .description('Run prompt across all configured providers and report latency/cost')
+  .option('-r, --runs <n>', 'Number of benchmark runs per provider', parseInt)
+  .option('-p, --provider <name>', 'Only benchmark a specific provider')
+  .option('-m, --model <model>', 'Specific model to benchmark')
+  .action(async (prompt, options) => {
+    try {
+      const ai = getAISwitch();
+      const providers = options.provider
+        ? [ai.providers.getProvider(options.provider)]
+        : ai.providers.getOrder();
+
+      console.log(chalk.bold(`\nBenchmarking prompt across ${providers.length} provider(s) (${options.runs || 1} run(s) each)...\n`));
+
+      const results = await ai.compare(prompt, {
+        runs: options.runs || 1,
+        model: options.model
+      });
+
+      const table = results.map((r) => ({
+        provider: r.provider,
+        model: r.model,
+        'latency (ms)': r.latencyMs == null ? '-' : r.latencyMs,
+        'TTFB (ms)': r.ttfbMs == null ? '-' : r.ttfbMs,
+        'cost (USD)': r.costUsd == null ? '-' : Number(r.costUsd).toFixed(6),
+        'cost source': r.costSource || '-'
+      }));
+
+      console.log(chalk.bold('\nBenchmark Results (median):'));
+      console.table(table);
+
+      results.forEach((r) => {
+        if (r.errors && r.errors.length > 0) {
+          console.log(chalk.red(`  ${r.provider}: ${r.errors.length}/${r.runs} runs failed`));
+          r.errors.slice(0, 3).forEach((e) => console.log(chalk.dim(`      - ${e}`)));
+        }
+      });
+      console.log('');
+    } catch (error) {
+      console.error(chalk.red('Error:'), error.message);
+      process.exit(1);
+    }
   });
 
 // Costs command

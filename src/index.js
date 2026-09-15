@@ -10,6 +10,7 @@ const { ProviderManager } = require('./providers/manager');
 const { AIError } = require('./utils/errors');
 const { normalizeMessages, trimMessages } = require('./utils/messages');
 const { ChatSession } = require('./utils/chatSession');
+const { runBenchmark } = require('./utils/benchmark');
 
 class AISwitch {
   constructor(options = {}) {
@@ -69,18 +70,47 @@ class AISwitch {
     const settings = this.providers.getFailoverSettings();
     const failoverEnabled = settings.enabled || Boolean(primary) || Boolean(backup);
 
-    // Ordered failover chain: preferred -> primary -> backup -> config chain -> default order
-    const providerOrder = this.providers.getOrder({
-      preferred: preferredProvider,
-      primary,
-      backup
-    });
-
-    if (providerOrder.length === 0) {
+    let candidates = [];
+    
+    // Cost-aware Routing
+    let routingRationale = null;
+    if (!preferredProvider && !primary && !backup) {
+      const best = this.providers.getBestAvailable(currentPrompt, options.tier);
+      routingRationale = best.rationale;
+      if (options.explain) {
+        console.log('\n--- Routing Decision ---');
+        console.log(`Decision: ${routingRationale.decision}`);
+        console.log(`Reason: ${routingRationale.reason}`);
+        console.log(`Required tier: ${routingRationale.requiredTier}`);
+        routingRationale.warnings.forEach(w => console.log(`Warning: ${w}`));
+        console.log('Evaluated Providers:');
+        routingRationale.evaluated.forEach(p => {
+           console.log(`  - ${p.provider} (${p.model}): tier=${p.tier}, cost=${p.costScore === 999999 ? 'Unknown' : p.costScore}, eligible=${p.eligible}, reason=${p.reason}${p.budgetWarning ? `, budget=${p.budgetWarning}` : ''}`);
+        });
+        console.log('------------------------\n');
+      }
+      candidates = [best];
+      
+      if (failoverEnabled) {
+        // Add backups, excluding the best provider
+        const backups = this.providers.getOrder().filter(p => p.name !== best.name);
+        candidates = candidates.concat(backups);
+      }
+    } else {
+      candidates = this.providers.getOrder({
+        preferred: preferredProvider,
+        primary,
+        backup
+      });
+      if (!failoverEnabled) {
+        candidates = candidates.slice(0, 1);
+      }
+    }
+    
+    if (candidates.length === 0) {
       throw new AIError('No AI providers configured. Please set up at least one provider.');
     }
 
-    const candidates = failoverEnabled ? providerOrder : providerOrder.slice(0, 1);
     let lastError = null;
 
     for (let i = 0; i < candidates.length; i++) {
@@ -141,6 +171,25 @@ class AISwitch {
       `Failed to get response${lastError?.provider ? ` from ${lastError.provider}` : ''}: ${lastError?.message ?? 'all providers failed'}`,
       lastError?.provider || 'unknown'
     );
+  }
+
+  /**
+   * Benchmark a prompt across providers without touching cache or cost ledger.
+   * @param {string} prompt - Prompt to benchmark (used verbatim for pruning)
+   * @param {Object} [options] - { runs, model, temperature, maxTokens, provider }
+   * @returns {Promise<Array>} One summary row per provider
+   */
+  async compare(prompt, options = {}) {
+    const providers = options.provider
+      ? [this.providers.getProvider(options.provider)]
+      : this.providers.getOrder();
+
+    return runBenchmark(providers, String(prompt), {
+      runs: options.runs,
+      model: options.model,
+      temperature: options.temperature,
+      maxTokens: options.maxTokens
+    });
   }
 
   /**

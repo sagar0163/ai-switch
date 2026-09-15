@@ -53,6 +53,10 @@ class CostTracker {
     return {
       totalRequests: 0,
       cacheHits: 0,
+      currentDay: new Date().toISOString().split('T')[0],
+      currentMonth: new Date().toISOString().slice(0, 7),
+      dailyCost: { total: 0, byProvider: {} },
+      monthlyCost: { total: 0, byProvider: {} },
       totalTokens: { input: 0, output: 0, cacheRead: 0 },
       byProvider: {},
       byModel: {}
@@ -70,8 +74,113 @@ class CostTracker {
       cacheRead: data.totalTokens?.cacheRead || 0
     };
     base.byProvider = data.byProvider || {};
+    
+    const today = new Date().toISOString().split('T')[0];
+    const thisMonth = new Date().toISOString().slice(0, 7);
+    
+    if (data.currentDay === today) {
+      base.dailyCost = data.dailyCost || { total: 0, byProvider: {} };
+    } else {
+      base.dailyCost = { total: 0, byProvider: {} };
+    }
+    
+    if (data.currentMonth === thisMonth) {
+      base.monthlyCost = data.monthlyCost || { total: 0, byProvider: {} };
+    } else {
+      base.monthlyCost = { total: 0, byProvider: {} };
+    }
+    
+    base.currentDay = today;
+    base.currentMonth = thisMonth;
     base.byModel = data.byModel || {};
     return base;
+  }
+
+  
+  _updatePeriodicCosts(provider, cost) {
+    const today = new Date().toISOString().split('T')[0];
+    const thisMonth = new Date().toISOString().slice(0, 7);
+
+    if (this.data.currentDay !== today) {
+      this.data.currentDay = today;
+      this.data.dailyCost = { total: 0, byProvider: {} };
+    }
+    if (this.data.currentMonth !== thisMonth) {
+      this.data.currentMonth = thisMonth;
+      this.data.monthlyCost = { total: 0, byProvider: {} };
+    }
+
+    this.data.dailyCost.total += cost;
+    this.data.dailyCost.byProvider[provider] = (this.data.dailyCost.byProvider[provider] || 0) + cost;
+
+    this.data.monthlyCost.total += cost;
+    this.data.monthlyCost.byProvider[provider] = (this.data.monthlyCost.byProvider[provider] || 0) + cost;
+  }
+
+  checkBudget(configBudgets, provider = null) {
+    if (!configBudgets) return { allowed: true };
+
+    const today = new Date().toISOString().split('T')[0];
+    const thisMonth = new Date().toISOString().slice(0, 7);
+
+    // Refresh buckets if needed
+    if (this.data.currentDay !== today) {
+      this.data.currentDay = today;
+      this.data.dailyCost = { total: 0, byProvider: {} };
+    }
+    if (this.data.currentMonth !== thisMonth) {
+      this.data.currentMonth = thisMonth;
+      this.data.monthlyCost = { total: 0, byProvider: {} };
+    }
+
+    const checkConstraints = (budget, currentCost, scopeName) => {
+      if (!budget) return { allowed: true };
+
+      let warning = null;
+      if (budget.monthly) {
+        if (budget.action === 'hard' && currentCost.monthly >= budget.monthly) {
+          return { allowed: false, reason: `Monthly budget exceeded for ${scopeName} (${currentCost.monthly} >= ${budget.monthly})` };
+        } else if (currentCost.monthly >= budget.monthly) {
+          warning = `Monthly budget exceeded for ${scopeName} (${currentCost.monthly} >= ${budget.monthly})`;
+        }
+      }
+
+      if (budget.daily) {
+        if (budget.action === 'hard' && currentCost.daily >= budget.daily) {
+          return { allowed: false, reason: `Daily budget exceeded for ${scopeName} (${currentCost.daily} >= ${budget.daily})` };
+        } else if (currentCost.daily >= budget.daily) {
+          warning = `Daily budget exceeded for ${scopeName} (${currentCost.daily} >= ${budget.daily})`;
+        }
+      }
+
+      return { allowed: true, warning };
+    };
+
+    const warnings = [];
+
+    // Check total budget
+    if (configBudgets.total) {
+      const totalCosts = { daily: this.data.dailyCost.total, monthly: this.data.monthlyCost.total };
+      const result = checkConstraints(configBudgets.total, totalCosts, 'total');
+      if (!result.allowed) return result;
+      if (result.warning) warnings.push(result.warning);
+    }
+
+    // Check provider budget
+    if (provider && configBudgets.providers && configBudgets.providers[provider]) {
+      const pCosts = {
+        daily: this.data.dailyCost.byProvider[provider] || 0,
+        monthly: this.data.monthlyCost.byProvider[provider] || 0
+      };
+      const result = checkConstraints(configBudgets.providers[provider], pCosts, provider);
+      if (!result.allowed) return result;
+      if (result.warning) warnings.push(result.warning);
+    }
+
+    if (warnings.length > 0) {
+      return { allowed: true, warning: warnings.join('; ') };
+    }
+    return { allowed: true };
   }
 
   _save() {
@@ -150,6 +259,8 @@ class CostTracker {
     this.data.totalTokens.input += normalized.inputTokens;
     this.data.totalTokens.output += normalized.outputTokens;
     this.data.totalTokens.cacheRead += normalized.cacheReadTokens;
+    
+    this._updatePeriodicCosts(provider, costs.cost);
 
     this._recordProvider(provider, modelKey, normalized, costs, pricing);
     this._save();
