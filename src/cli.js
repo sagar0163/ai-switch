@@ -34,8 +34,6 @@ function getAISwitch() {
 
 // Ask command
 program
- 
-program
   .command('ask <prompt>')
   .description('Ask an AI provider a question')
   .option('-p, --provider <name>', 'Specific provider to use (openai, anthropic, etc.)')
@@ -406,8 +404,6 @@ program
   });
 
 // Interactive chat mode
-program
- 
 program
   .command('chat')
   .description('Start an interactive chat session')
