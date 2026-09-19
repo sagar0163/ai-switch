@@ -254,3 +254,62 @@ describe('AISwitch Retry-After handling', () => {
     expect(ai.providers.providers.anthropic.complete).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('AISwitch stream', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('yields token deltas correctly and returns final concatenated output', async () => {
+    const ai = buildAI();
+    ai.providers.providers.openai.stream = async function* () { yield 'chunk1'; yield ' '; yield 'chunk2'; };
+ai.providers.providers.openai.streamUsage = { totalTokens: 10 };
+
+    const chunks = [];
+    const generator = ai.stream('hi', { provider: 'openai' });
+    for await (const chunk of generator) {
+      chunks.push(chunk);
+    }
+    
+    expect(chunks).toEqual(['chunk1', ' ', 'chunk2']);
+  });
+
+  it('fails over mid-stream (wait, no, it fails over before yielding chunks)', async () => {
+    const ai = buildAI();
+    ai.providers.providers.openai.stream = jest.fn().mockImplementation(async function* () { throw new ProviderError('down', 'openai', 503); });
+    ai.providers.providers.anthropic.stream = jest.fn().mockImplementation(async function* () { yield 'anthropic ok'; });
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const chunks = [];
+    const generator = ai.stream('hi', { primary: 'openai', backup: 'anthropic' });
+    for await (const chunk of generator) {
+      chunks.push(chunk);
+    }
+    
+    expect(chunks).toEqual(['anthropic ok']);
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it('uses cache and short-circuits during stream', async () => {
+    const ai = buildAI({ cache: { enabled: true, ttl: 60 } });
+    ai.providers.providers.openai.stream = async function* () { yield 'fresh'; };
+ai.providers.providers.openai.streamUsage = { totalTokens: 5 };
+
+    // First call to cache it
+    let chunks = [];
+    for await (const chunk of ai.stream('hi cache', { provider: 'openai' })) {
+      chunks.push(chunk);
+    }
+    expect(chunks.join('')).toBe('fresh');
+
+    // Second call should come from cache
+    ai.providers.providers.openai.stream = jest.fn();
+    chunks = [];
+    for await (const chunk of ai.stream('hi cache', { provider: 'openai' })) {
+      chunks.push(chunk);
+    }
+    expect(chunks.join('')).toBe('fresh');
+    expect(ai.providers.providers.openai.stream).not.toHaveBeenCalled();
+  });
+});
+

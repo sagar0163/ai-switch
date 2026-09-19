@@ -192,6 +192,138 @@ class AISwitch {
     });
   }
 
+
+  /**
+   * Stream a query to an AI provider, failing over in explicit order.
+   * @param {string|Array} request - Prompt string or messages array
+   * @param {Object} options - Provider and request options
+   * @returns {AsyncGenerator<string>} Token deltas
+   */
+  async *stream(request, options = {}) {
+    const {
+      provider: preferredProvider,
+      primary,
+      backup,
+      model,
+      temperature,
+      maxTokens
+    } = options;
+
+    const messages = normalizeMessages(request);
+    const currentPrompt = messages[messages.length - 1].content;
+    const trimmed = trimMessages(messages, {
+      maxTurns: options.maxTurns ?? this.chatConfig.maxTurns,
+      maxContextTokens: options.maxContextTokens ?? this.chatConfig.maxContextTokens
+    });
+
+    const cacheKey = typeof request === 'string' ? request : JSON.stringify(trimmed);
+
+    // Check cache first
+    if (this.cache.isEnabled()) {
+      const cached = await this.cache.get(cacheKey, preferredProvider);
+      if (cached) {
+        this.costs.recordCacheHit(preferredProvider || 'cache');
+        yield cached;
+        return;
+      }
+    }
+
+    const settings = this.providers.getFailoverSettings();
+    const failoverEnabled = settings.enabled || Boolean(primary) || Boolean(backup);
+
+    let candidates = [];
+    
+    // Cost-aware Routing
+    let routingRationale = null;
+    if (!preferredProvider && !primary && !backup) {
+      const best = this.providers.getBestAvailable(currentPrompt, options.tier);
+      routingRationale = best.rationale;
+      candidates = [best];
+      
+      if (failoverEnabled) {
+        const backups = this.providers.getOrder().filter(p => p.name !== best.name);
+        candidates = candidates.concat(backups);
+      }
+    } else {
+      candidates = this.providers.getOrder({
+        preferred: preferredProvider,
+        primary,
+        backup
+      });
+      if (!failoverEnabled) {
+        candidates = candidates.slice(0, 1);
+      }
+    }
+    
+    if (candidates.length === 0) {
+      throw new AIError('No AI providers configured. Please set up at least one provider.');
+    }
+
+    let lastError = null;
+
+    for (let i = 0; i < candidates.length; i++) {
+      const provider = candidates[i];
+
+      if (this.providers.isInCooldown(provider.name)) {
+        continue;
+      }
+
+      let successor = null;
+      for (let j = i + 1; j < candidates.length; j++) {
+        if (!this.providers.isInCooldown(candidates[j].name)) {
+          successor = candidates[j];
+          break;
+        }
+      }
+
+      try {
+        const requestedModel = model || provider.defaultModel;
+        
+        const streamOptions = {
+          model: requestedModel,
+          temperature: temperature ?? 0.7,
+          maxTokens: maxTokens || 2048,
+          messages: trimmed
+        };
+
+        const generator = provider.stream(currentPrompt, streamOptions);
+        let fullText = '';
+
+        for await (const chunk of generator) {
+          fullText += chunk;
+          yield chunk;
+        }
+
+        this.providers.recordSuccess(provider.name);
+
+        if (this.cache.isEnabled()) {
+          await this.cache.set(cacheKey, fullText, preferredProvider || provider.name);
+        }
+
+        // provider.streamUsage should be populated after successful stream finishes
+        this.costs.record(provider.name, provider.streamUsage, { model: requestedModel });
+
+        return;
+      } catch (error) {
+        lastError = error;
+        const retryAfter = typeof error.retryAfter === 'number' && error.retryAfter > 0
+          ? error.retryAfter
+          : null;
+        this.providers.recordFailure(provider.name, retryAfter);
+
+        if (successor) {
+          const reason = retryAfter ? ` (Retry-After: ${retryAfter}s)` : '';
+          console.warn(`\n[ai-switch] Provider "${provider.name}" failed${reason}; failing over to "${successor.name}"`);
+        }
+      }
+    }
+
+    throw new AIError(
+      `Failed to stream response${lastError?.provider ? ` from ${lastError.provider}` : ''}: ${lastError?.message ?? 'all providers failed'}`,
+      lastError?.provider || 'unknown'
+    );
+  }
+
   /**
    * List all configured providers
    * @returns {Array} Provider info

@@ -34,6 +34,8 @@ function getAISwitch() {
 
 // Ask command
 program
+ 
+program
   .command('ask <prompt>')
   .description('Ask an AI provider a question')
   .option('-p, --provider <name>', 'Specific provider to use (openai, anthropic, etc.)')
@@ -44,15 +46,17 @@ program
   .option('-M, --max-tokens <value>', 'Max tokens', parseInt)
   .option('--primary <provider>', 'Primary provider for failover')
   .option('--backup <provider>', 'Backup provider for failover')
+  .option('--no-stream', 'Disable streaming output')
+  .option('--json', 'Output raw JSON')
   .action(async (prompt, options) => {
-    const spinner = ora({
-      text: 'Thinking...',
-      spinner: 'dots'
-    }).start();
+    let spinner;
+    if (!options.json) {
+      spinner = ora({ text: 'Thinking...', spinner: 'dots' }).start();
+    }
 
     try {
       const ai = getAISwitch();
-      const response = await ai.ask(prompt, {
+      const askOptions = {
         tier: options.tier,
         explain: options.explain,
         provider: options.provider,
@@ -61,14 +65,44 @@ program
         model: options.model,
         temperature: options.temperature,
         maxTokens: options.maxTokens
-      });
+      };
 
-      spinner.stop();
-      console.log('\n' + chalk.green('Response:'));
-      console.log(response);
+      if (options.json || options.stream === false) {
+        const response = await ai.ask(prompt, askOptions);
+        if (spinner) spinner.stop();
+        if (options.json) {
+          console.log(JSON.stringify({ response }));
+        } else {
+          console.log('\n' + chalk.green('Response:'));
+          console.log(response);
+        }
+      } else {
+        const stream = ai.stream(prompt, askOptions);
+        let firstChunk = true;
+        let fullResponse = '';
+        for await (const chunk of stream) {
+          if (firstChunk) {
+            spinner.stop();
+            console.log('\n' + chalk.green('Response:'));
+            firstChunk = false;
+          }
+          process.stdout.write(chunk);
+          fullResponse += chunk;
+        }
+        if (firstChunk) {
+          spinner.stop();
+          console.log('\n' + chalk.green('Response:'));
+        } else {
+          console.log(); // Final newline
+        }
+      }
     } catch (error) {
-      spinner.stop();
-      console.error(chalk.red('Error:'), error.message);
+      if (spinner) spinner.stop();
+      if (options.json) {
+        console.error(JSON.stringify({ error: error.message }));
+      } else {
+        console.error(chalk.red('Error:'), error.message);
+      }
       process.exit(1);
     }
   });
@@ -373,10 +407,13 @@ program
 
 // Interactive chat mode
 program
+ 
+program
   .command('chat')
   .description('Start an interactive chat session')
   .option('-p, --provider <name>', 'Specific provider to use (openai, anthropic, etc.)')
   .option('-m, --model <model>', 'Specific model to use')
+  .option('--no-stream', 'Disable streaming output')
   .action((options) => {
     console.log(chalk.bold('\nAI Chat Mode (type "exit" to quit)\n'));
 
@@ -398,18 +435,43 @@ program
 
         session.addUser(prompt);
 
-        const spinner = ora('Thinking...').start();
+        let spinner = ora('Thinking...').start();
         const { messages, turns, tokens } = session.nextRequest();
+        spinner.stop();
         console.log(chalk.dim(`  ↪ sending ${turns} turn${turns === 1 ? '' : 's'} (~${tokens.toLocaleString()} tokens)`));
+        spinner = ora('Thinking...').start();
+
+        const askOptions = {
+          provider: options.provider,
+          model: options.model
+        };
 
         try {
-          const response = await ai.ask(messages, {
-            provider: options.provider,
-            model: options.model
-          });
-          session.addAssistant(response);
-          spinner.stop();
-          console.log(chalk.green('AI: ') + response + '\n');
+          if (options.stream === false) {
+            const response = await ai.ask(messages, askOptions);
+            session.addAssistant(response);
+            spinner.stop();
+            console.log(chalk.green('AI: ') + response + '\n');
+          } else {
+            const stream = ai.stream(messages, askOptions);
+            let firstChunk = true;
+            let fullResponse = '';
+            for await (const chunk of stream) {
+              if (firstChunk) {
+                spinner.stop();
+                process.stdout.write(chalk.green('AI: '));
+                firstChunk = false;
+              }
+              process.stdout.write(chunk);
+              fullResponse += chunk;
+            }
+            if (firstChunk) {
+              spinner.stop();
+              process.stdout.write(chalk.green('AI: '));
+            }
+            console.log('\n');
+            session.addAssistant(fullResponse);
+          }
         } catch (error) {
           spinner.stop();
           console.error(chalk.red('Error:'), error.message + '\n');
