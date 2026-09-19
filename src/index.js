@@ -276,6 +276,7 @@ class AISwitch {
         }
       }
 
+      let fullText = '';
       try {
         const requestedModel = model || provider.defaultModel;
         
@@ -287,7 +288,6 @@ class AISwitch {
         };
 
         const generator = provider.stream(currentPrompt, streamOptions);
-        let fullText = '';
 
         for await (const chunk of generator) {
           fullText += chunk;
@@ -310,6 +310,10 @@ class AISwitch {
           ? error.retryAfter
           : null;
         this.providers.recordFailure(provider.name, retryAfter);
+
+        if (fullText.length > 0) {
+          throw new AIError(`Stream interrupted from ${provider.name}: ${error.message}`, provider.name);
+        }
 
         if (successor) {
           const reason = retryAfter ? ` (Retry-After: ${retryAfter}s)` : '';

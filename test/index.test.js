@@ -274,7 +274,7 @@ ai.providers.providers.openai.streamUsage = { totalTokens: 10 };
     expect(chunks).toEqual(['chunk1', ' ', 'chunk2']);
   });
 
-  it('fails over mid-stream (wait, no, it fails over before yielding chunks)', async () => {
+  it('fails over before yielding chunks', async () => {
     const ai = buildAI();
     ai.providers.providers.openai.stream = jest.fn().mockImplementation(async function* () { throw new ProviderError('down', 'openai', 503); });
     ai.providers.providers.anthropic.stream = jest.fn().mockImplementation(async function* () { yield 'anthropic ok'; });
@@ -288,6 +288,32 @@ ai.providers.providers.openai.streamUsage = { totalTokens: 10 };
     
     expect(chunks).toEqual(['anthropic ok']);
     expect(warn).toHaveBeenCalled();
+  });
+
+  it('throws and does not fail over if interrupted mid-stream after yielding', async () => {
+    const ai = buildAI();
+    ai.providers.providers.openai.stream = jest.fn().mockImplementation(async function* () {
+      yield 'chunk1';
+      throw new ProviderError('mid-stream error', 'openai', 500);
+    });
+    ai.providers.providers.anthropic.stream = jest.fn().mockImplementation(async function* () { yield 'anthropic ok'; });
+
+    const chunks = [];
+    const generator = ai.stream('hi', { primary: 'openai', backup: 'anthropic' });
+    
+    let caughtError;
+    try {
+      for await (const chunk of generator) {
+        chunks.push(chunk);
+      }
+    } catch (e) {
+      caughtError = e;
+    }
+    
+    expect(chunks).toEqual(['chunk1']);
+    expect(caughtError).toBeDefined();
+    expect(caughtError.message).toMatch(/Stream interrupted from openai: mid-stream error/);
+    expect(ai.providers.providers.anthropic.stream).not.toHaveBeenCalled();
   });
 
   it('uses cache and short-circuits during stream', async () => {
